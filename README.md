@@ -1,14 +1,10 @@
 # Chloroplasters
 Code for the tower garden
- XRP Tower Garden Control System
-# Chloroplasters - EcoSmart Circular Tower Garden
 
 from xrp import *
 import time
 
-
-# PIN SETUP - (Adjust)
-
+# SETUP
 
 # Sensors (analog/digital inputs)
 SOIL_MOISTURE_PIN = 0      # Capacitive soil moisture sensor
@@ -28,3 +24,18 @@ FRESH_WATER_PUMP_PIN = 4   # Pump for fresh water (dilution)
 FAN_PIN = 5                # Cooling fan for water
 RED_LIGHT_PIN = 6          # Red LED - tank empty warning
 ORANGE_LIGHT_PIN = 7       # Orange LED - replace water warning
+
+# Button to stop the system
+STOP_BUTTON_PIN = 8
+
+# THRESHOLD VALUES - From  flowcharts
+MOISTURE_MIN = 35          # % - turn pump ON below this
+MOISTURE_TARGET = 60       # % - turn pump OFF at this
+PH_MIN = 5.5               # pH too low
+PH_MAX = 6.5               # pH too high
+EC_MIN = 1.0               # mS/cm - too little nutrients
+EC_MAX = 2.0               # mS/cm - too many nutrients
+TURBIDITY_MAX = 30         # NTU - water too dirty
+WATER_TEMP_MAX = 30        # °C - turn fan ON
+WATER_TEMP_MIN = 26        # °C - turn fan OFF
+
