@@ -1,0 +1,23 @@
+from machine import Pin, ADC
+
+# Setup
+turbidity_sensor = ADC(Pin(26))
+orange_light = Pin(18, Pin.OUT)
+
+# 0 = Very Dirty, 65535 = Very Clean
+DIRTY_THRESHOLD = 30000 
+
+def turbidity_homeostasis():
+    # Read the raw analog value
+    val = turbidity_sensor.read_u16()
+    print(f"Water Clarity Reading: {val}")
+    
+    if val < DIRTY_THRESHOLD:
+        print("ACTION: Water is cloudy! Orange warning light ON.")
+        orange_light.value(1)
+    else:
+        print("ACTION: Water is clear. Orange light OFF.")
+        orange_light.value(0)
+
+# Test run
+turbidity_homeostasis()

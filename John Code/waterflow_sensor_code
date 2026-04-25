@@ -1,0 +1,65 @@
+from machine import Pin, I2C
+import time
+
+# --- Hardware Setup ---
+# Lights
+RED_LIGHT = Pin(16, Pin.OUT)    # NO WATER
+YELLOW_LIGHT = Pin(15, Pin.OUT) # MECHANICAL FAILURE
+PUMP = Pin(17, Pin.OUT)
+
+# Flow Sensor (Digital Pin)
+flow_input = Pin(14, Pin.IN)
+
+# I2C for SHT31 (Humidity)
+i2c = I2C(0, sda=Pin(0), scl=Pin(1))
+SHT31_ADDR = 0x44
+
+def get_flow_rate():
+    count = 0
+    # Sample the pin for 200ms to see if it pulses
+    start_time = time.ticks_ms()
+    while time.ticks_diff(time.ticks_ms(), start_time) < 200:
+        if flow_input.value():
+            count += 1
+            time.sleep(0.01) 
+    return count > 0
+
+def get_humidity():
+    try:
+        i2c.writeto(SHT31_ADDR, b'\x2c\x06')
+        time.sleep(0.1)
+        data = i2c.readfrom(SHT31_ADDR, 6)
+        raw_hum = (data[3] << 8) | data[4]
+        return 100 * (raw_hum / 65535.0)
+    except:
+        return 0
+
+def flow_homeostasis():
+    print("Checking Flow System...")
+    
+    has_flow = get_flow_rate()
+    humidity = get_humidity()
+    
+    if not has_flow:
+        if humidity == 0:
+            print("ALERT: Tank is EMPTY. (Red Light)")
+            RED_LIGHT.value(1)
+            YELLOW_LIGHT.value(0)
+            PUMP.value(0) # Stop pump to prevent burning out
+        else:
+            print("ALERT: Mechanical Failure! Water present but not moving. (Yellow Light)")
+            YELLOW_LIGHT.value(1)
+            RED_LIGHT.value(0)
+            # Try a pump restart
+            PUMP.value(0)
+            time.sleep(1)
+            PUMP.value(1)
+    else:
+        # Everything is moving fine
+        print("System Healthy: Water is flowing.")
+        RED_LIGHT.value(0)
+        YELLOW_LIGHT.value(0)
+        PUMP.value(1)
+
+# Run the check
+flow_homeostasis()
