@@ -1,41 +1,39 @@
-# Chloroplasters
-Code for the tower garden
+# 🌿 Chloroplasters - Smart Tower Garden System
 
-from xrp import *
-import time
+Το **Chloroplasters Tower Garden** είναι ένα πλήρως αυτοματοποιημένο υδροπονικό σύστημα κάθετης καλλιέργειας, ελεγχόμενο από τον μικροελεγκτή **SparkFun XRP (RP2350)**. Το σύστημα διατηρεί την ομοιόσταση των φυτών ελέγχοντας δυναμικά το πότισμα, τα επίπεδα pH και την ηλεκτρική αγωγιμότητα (EC), ενώ προσαρμόζεται έξυπνα στις καιρικές συνθήκες του περιβάλλοντος.
 
-# SETUP
+## ⚙️ Αρχιτεκτονική Υλικού (Hardware Components)
+Ο κώδικας είναι χτισμένος σε MicroPython και επικοινωνεί με μια σειρά από αισθητήρες και ενεργοποιητές:
 
-# Sensors (analog/digital inputs)
-SOIL_MOISTURE_PIN = 0      # Capacitive soil moisture sensor
-PH_SENSOR_PIN = 1          # pH sensor (analog)
-EC_SENSOR_PIN = 2          # Conductivity sensor (analog)
-TURBIDITY_SENSOR_PIN = 3   # Turbidity sensor (analog)
-WATER_TEMP_PIN = 4         # Water temperature sensor
-FLOW_SENSOR_PIN = 5        # Flow sensor (digital or analog)
-HUMIDITY_SENSOR_PIN = 6    # Humidity sensor (for tank empty check)
+* **Εγκέφαλος:** SparkFun XRP Controller (RP2350).
+* **ADC Module (ADS1015):** Επικοινωνεί μέσω I2C (Qwiic 0) και μετατρέπει τα αναλογικά σήματα των αισθητήρων pH, EC και Θολότητας (Turbidity) σε ψηφιακές τιμές.
+* **Περιβαλλοντικός Αισθητήρας (SHT31):** Επικοινωνεί μέσω I2C και μετράει με ακρίβεια τη θερμοκρασία και την υγρασία του αέρα γύρω από τον πύργο.
+* **Θερμόμετρο Νερού (DS18B20):** Αδιάβροχος αισθητήρας που επικοινωνεί μέσω πρωτοκόλλου OneWire για την παρακολούθηση της θερμοκρασίας της δεξαμενής.
+* **Δοσομετρητές Χημικών (Syringe Pumps):** Τρεις σερβοκινητήρες (PWM στα Pins 6, 7, 8) που πιέζουν σύριγγες των 20mL για χορήγηση ακριβείας (1mL/δόση) κιτρικού οξέος, διττανθρακικού καλίου και θρεπτικών συστατικών.
+* **Αντλίες (Relays):** Έλεγχος αντλίας άρδευσης (Pin 12) και ανεμιστήρα ψύξης (Pin 19) μέσω ψηφιακών εξόδων (ON/OFF).
 
-# Outputs (pumps, lights, fan)
-WATER_PUMP_PIN = 0         # Main irrigation pump
-PH_PUMP_ACID_PIN = 1       # Pump for citric acid (pH too high)
-PH_PUMP_BASE_PIN = 2       # Pump for potassium bicarbonate (pH too low)
-NUTRIENT_PUMP_PIN = 3      # Pump for nutrient solution
-FRESH_WATER_PUMP_PIN = 4   # Pump for fresh water (dilution)
-FAN_PIN = 5                # Cooling fan for water
-RED_LIGHT_PIN = 6          # Red LED - tank empty warning
-ORANGE_LIGHT_PIN = 7       # Orange LED - replace water warning
+## 🧠 Σημασιολογία & Λειτουργίες Κώδικα (Core Features)
 
-# Button to stop the system
-STOP_BUTTON_PIN = 8
+### 1. Έξυπνο, Δυναμικό Πότισμα (Smart Weather Irrigation)
+Το σύστημα δεν ποτίζει "τυφλά". Διαθέτει ένα έξυπνο χρονόμετρο (`check_and_water()`) που προσαρμόζεται στο μικροκλίμα του δωματίου:
+* Διαβάζει τον αισθητήρα αέρα **SHT31** (`adjust_interval_by_weather()`).
+* Αν έχει **ζέστη/ξηρασία** (>28°C ή <40% υγρασία), το νερό εξατμίζεται γρήγορα, άρα μειώνει τον χρόνο αναμονής μεταξύ των ποτισμάτων στα 15 λεπτά.
+* Αν έχει **κρύο/υγρασία** (<18°C ή >75% υγρασία), τα φυτά δεν χρειάζονται τόσο νερό, άρα αυξάνει την αναμονή στα 45 λεπτά.
+* Σε **κανονικές συνθήκες**, διατηρεί τον προεπιλεγμένο κύκλο αναμονής των 30 λεπτών.
+* Η ίδια η άρδευση διαρκεί σταθερά 3 λεπτά (`IRRIGATION_DURATION`), αρκετά για να γεμίσουν τα "πιατάκια" του πύργου και να λειτουργήσει η βαρύτητα.
 
-# THRESHOLD VALUES - From  flowcharts
-MOISTURE_MIN = 35          # % - turn pump ON below this
-MOISTURE_TARGET = 60       # % - turn pump OFF at this
-PH_MIN = 5.5               # pH too low
-PH_MAX = 6.5               # pH too high
-EC_MIN = 1.0               # mS/cm - too little nutrients
-EC_MAX = 2.0               # mS/cm - too many nutrients
-TURBIDITY_MAX = 30         # NTU - water too dirty
-WATER_TEMP_MAX = 30        # °C - turn fan ON
-WATER_TEMP_MIN = 26        # °C - turn fan OFF
+### 2. Ομοιόσταση pH (pH Homeostasis)
+Το σύστημα διαβάζει τα επίπεδα pH από το κανάλι A0 του ADS1015 και διατηρεί το νερό σε ιδανικά επίπεδα (5.5 - 6.5):
+* **Αν pH > 6.5:** Το περιβάλλον είναι αλκαλικό. Η συνάρτηση `ph_homeostasis()` δίνει σήμα στο Servo 1 να πιέσει τη σύριγγα και να χορηγήσει 1mL Κιτρικού Οξέος για να ρίξει το pH (pH↓).
+* **Αν pH < 5.5:** Το περιβάλλον είναι όξινο. Ενεργοποιείται το Servo 3 για να χορηγήσει 1mL Διττανθρακικού Καλίου (pH↑).
 
+### 3. Ομοιόσταση Θρεπτικών Συστατικών (EC Homeostasis)
+Το σύστημα ελέγχει την Ηλεκτρική Αγωγιμότητα (EC) μέσω του καναλιού A1 για να εξασφαλίσει ότι τα φυτά "τρέφονται" σωστά (όρια 1.0 - 2.0 mS/cm):
+* **Αν EC < 1.0:** Λείπουν θρεπτικά συστατικά. Το Servo 4 πιέζει τη σύριγγα με το υγρό λίπασμα.
+* **Αν EC > 2.0:** Έχουν συσσωρευτεί πολλά άλατα (κίνδυνος για τις ρίζες). Ενεργοποιείται η αντλία καθαρού νερού (`FRESH_WATER_PUMP_PIN`) για 5 δευτερόλεπτα προκειμένου να αραιώσει το διάλυμα της δεξαμενής.
+
+### 4. Προστασία Θερμοκρασίας Δεξαμενής
+Ο αδιάβροχος αισθητήρας `DS18B20` βρίσκεται μόνιμα μέσα στο νερό. Αν η θερμοκρασία του νερού ξεπεράσει τους 30°C (κάτι που προκαλεί ανάπτυξη βακτηρίων και σήψη ριζών), ο μικροελεγκτής ενεργοποιεί το Relay του ανεμιστήρα (`FAN_PIN`) για να ψύξει τη δεξαμενή. Κλείνει αυτόματα όταν πέσει στους 26°C.
+
+### 5. Ασφάλεια και Emergency Stop
+Σε περίπτωση ανάγκης ή συντήρησης, υπάρχει το ενσωματωμένο `USER_BUTTON` στο Pin 36. Αν πατηθεί, το σύστημα το αντιλαμβάνεται ως Interrupt, σβήνει αμέσως όλες τις αντλίες νερού και τους ανεμιστήρες για λόγους ασφαλείας, και τερματίζει ομαλά την εκτέλεση του προγράμματος (`break` από τη main loop).

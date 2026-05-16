@@ -1,162 +1,183 @@
-
 # XRP Tower Garden Control System
 # Chloroplasters
 
-
-from xrp import *
-from machine import Pin, I2C
+from machine import Pin, I2C, PWM
 import time
-
+import onewire
+import ds18x20
 
 # ============================================
-# PIN SETUP - XRP Controller
+# 1. PIN SETUP - Ρυθμίσεις Θυρών
 # ============================================
 
-# --- I2C bus configuration ---
-# Both ADS1015 and SHT31 share the same I2C bus (Qwiic 0).
-# Daisy-chain SHT31 from ADS1015's second Qwiic connector.
+# --- I2C bus configuration (Για ADS1015 και SHT31) ---
 I2C_SDA_PIN = 4    # IO4 -> Qwiic 0 SDA
 I2C_SCL_PIN = 5    # IO5 -> Qwiic 0 SCL
+ADS1015_ADDR = 0x48   
+SHT31_ADDR   = 0x44   
 
-# I2C device addresses
-ADS1015_ADDR = 0x48   # Default address of SparkFun ADS1015
-SHT31_ADDR   = 0x44   # Default address of SHT31
+# --- Analog sensor channels on ADS1015 (Κανάλια Αναλογικών Αισθητήρων) ---
+PH_CHANNEL            = 0    # A0 -> pH sensor
+EC_CHANNEL            = 1    # A1 -> TDS Sensor 
+TURBIDITY_CHANNEL     = 2    # A2 -> Turbidity
 
+# --- Digital sensors (Ψηφιακοί Αισθητήρες) ---
+FLOW_SENSOR_PIN = 2    # IO2 -> Flow sensor 
+WATER_TEMP_PIN  = 20   # IO20 -> DS18B20 αδιάβροχος αισθητήρας (Με 4.7kΩ αντίσταση!)
 
-# --- Analog sensor channels on ADS1015 ---
-# These are NOT XRP pins - they're channel numbers on the ADS1015 chip.
-# Note: No soil moisture sensor - Tower Garden is hydroponic.
-PH_CHANNEL        = 0    # ADS1015 A0 -> Generic BNC pH sensor
-EC_CHANNEL        = 1    # ADS1015 A1 -> DFRobot TDS Sensor SEN0244
-TURBIDITY_CHANNEL = 2    # ADS1015 A2 -> DFRobot Turbidity SEN0189 (via voltage divider 5V->3.3V!)
-# Channel A3 reserved for future expansion
+# --- Outputs: SERVOS for Syringe Pumps (Σερβοκινητήρες Σύριγγας) ---
+PH_ACID_SERVO_PIN  = 6    # IO6  (Servo 1) -> Κιτρικό Οξύ (pH↓)
+PH_BASE_SERVO_PIN  = 7    # IO7  (Servo 3) -> Διττανθρακικό (pH↑)
+NUTRIENT_SERVO_PIN = 8   # IO8 (Servo 4) -> Θρεπτικό (EC↑)
 
+# --- Outputs: PUMPS & FAN (Αντλίες Νερού και Ανεμιστήρας) ---
+WATER_PUMP_PIN       = 12   # IO12 -> Relay 1 (Κεντρική αντλία)
+FRESH_WATER_PUMP_PIN = 18   # IO18 -> Relay 2 (Αντλία καθαρού νερού)
+FAN_PIN              = 19   # IO19 -> Relay 3 (Ανεμιστήρας)
 
-# --- Digital sensors ---
-FLOW_SENSOR_PIN     = 2    # IO2  -> YF-S201 Flow sensor (yellow wire, VCC=5V)
-WATER_TEMP_PIN      = 20   # IO20 -> DS18B20 waterproof temperature sensor (1-Wire) ΘΕΡΜΟΚΡΑΣΙΑΣ!!!! 
-                           #         VCC=3.3V, GND=GND, needs 4.7kΩ pull-up resistor!
+# --- Outputs: LEDs ---
+RED_LIGHT_PIN    = 22   # IO22 -> Red LED (Πρόβλημα!)
+ORANGE_LIGHT_PIN = 23   # IO23 -> Orange LED (Βρώμικο νερό)
 
-
-# --- Outputs: SERVOS for chemical dosing (syringe pump system) ---
-# Each servo pushes a 20mL syringe to dispense ~1mL doses.
-PH_ACID_SERVO_PIN     = 6    # IO6  (Servo 1) -> Servo for citric acid syringe (pH↓)
-PH_BASE_SERVO_PIN     = 7    # IO7  (Servo 3) -> Servo for potassium bicarbonate syringe (pH↑)
-NUTRIENT_SERVO_PIN    = 27   # IO27 (Servo 4) -> Servo for nutrient solution syringe (EC↑)
-
-
-# --- Outputs: PUMPS & FAN (via relay modules - NEVER direct!) ---
-WATER_PUMP_PIN       = 12   # IO12 -> Relay 1 (main irrigation pump)
-FRESH_WATER_PUMP_PIN = 18   # IO18 -> Relay 2 (fresh water pump for dilution)
-FAN_PIN              = 19   # IO19 -> Relay 3 (cooling fan)
-
-
-# --- Outputs: LEDs (with 220Ω current-limiting resistors) ---
-RED_LIGHT_PIN    = 22   # IO22 -> Red LED (tank empty / pump failure / syringes empty)
-ORANGE_LIGHT_PIN = 23   # IO23 -> Orange LED (water needs replacing)
-
-
-# --- Stop button (built-in USER button on XRP) ---
-STOP_BUTTON_PIN = 36    # IO36 -> Built-in USER button on XRP
+# --- Stop button ---
+STOP_BUTTON_PIN = 36    # IO16 -> USER button
 
 # =========================================================
-# THRESHOLD VALUES (from project flowcharts)
+# 2. THRESHOLD VALUES - Όρια Λειτουργίας
 # =========================================================
 
-MOISTURE_MIN      = 35     # %    - below this -> pump ON
-MOISTURE_TARGET   = 60     # %    - at this    -> pump OFF
-PH_MIN            = 5.5    # pH   - too low
-PH_MAX            = 6.5    # pH   - too high
-EC_MIN            = 1.0    # mS/cm - too few nutrients
-EC_MAX            = 2.0    # mS/cm - too many nutrients
-TURBIDITY_MAX     = 30     # NTU   - water too dirty
-WATER_TEMP_MAX    = 30     # °C    - turn fan ON
-WATER_TEMP_MIN    = 26     # °C    - turn fan OFF
-TANK_HUMIDITY_MIN = 5      # %     - below this -> tank empty
+PH_MIN            = 5.5    # pH - Πολύ χαμηλό (Χρειάζεται Base)
+PH_MAX            = 6.5    # pH - Πολύ υψηλό (Χρειάζεται Acid)
+EC_MIN            = 1.0    # mS/cm - Λίγα θρεπτικά
+EC_MAX            = 2.0    # mS/cm - Πολλά θρεπτικά
+TURBIDITY_MAX     = 30     # NTU - Πολύ βρώμικο
+WATER_TEMP_MAX    = 30     # °C - Άναψε ανεμιστήρα
+WATER_TEMP_MIN    = 26     # °C - Σβήσε ανεμιστήρα
+TANK_HUMIDITY_MIN = 5      # % - Άδεια δεξαμενή
 
+# --- Χρονοδιακόπτης Ποτίσματος ---
+IRRIGATION_DURATION = 180   # Σταθερό: 3 λεπτά για να γεμίζουν τα πιατάκια
+
+# Ξεκινάει ως κανονικό (30 λεπτά)
+IRRIGATION_INTERVAL = 1800  
+
+# Μεταβλητές ελέγχου
+last_water_time = 0
+is_watering = False
 
 # =========================================================
-# I2C BUS INITIALIZATION
+# 3. INITIALIZATION - Αρχικοποίηση Επικοινωνίας
 # =========================================================
 
+# I2C (Για ADS1015 και SHT31)
 i2c = I2C(0, scl=Pin(I2C_SCL_PIN), sda=Pin(I2C_SDA_PIN), freq=100000)
 
+# OneWire & DS18B20 (Για τον αδιάβροχο αισθητήρα νερού)
+ds_pin = Pin(WATER_TEMP_PIN)
+ds_sensor = ds18x20.DS18X20(onewire.OneWire(ds_pin))
+roms = ds_sensor.scan()
+if not roms:
+    print("ΠΡΟΣΟΧΗ: Δεν βρέθηκε ο αισθητήρας DS18B20! Ελέγξτε την αντίσταση 4.7kΩ.")
 
 # =========================================================
-# ADS1015 ANALOG-TO-DIGITAL CONVERTER FUNCTIONS
+# 4. SERVO CONTROL FUNCTIONS - Έλεγχος Σύριγγας
 # =========================================================
-# The ADS1015 is a 12-bit ADC with 4 channels (A0-A3).
-# We talk to it over I2C to read analog voltages.
+# "Βήμα 10"
 
-# ADS1015 register addresses
+# Ρυθμίστε εδώ πόσες μοίρες πρέπει να γυρίσει για να βγάλει 1mL
+SERVO_1ML_ANGLE = 20  # ΑΛΛΑΞΤΕ ΑΥΤΟ ΤΟ ΝΟΥΜΕΡΟ ΜΕΤΑ ΤΗ ΒΑΘΜΟΝΟΜΗΣΗ
+
+def set_servo_angle(pin_num, angle):
+    """
+    Γυρίζει το Servo σε συγκεκριμένη γωνία (0-180).
+    Moves the Servo to a specific angle (0-180).
+    """
+    pwm = PWM(Pin(pin_num))
+    pwm.freq(50) # Τα Servos δουλεύουν στα 50Hz
+    
+    # Μετατροπή μοιρών (0-180) σε duty cycle (περίπου 1000-9000 για MicroPython)
+    min_duty = 1000  # 0 μοίρες
+    max_duty = 9000  # 180 μοίρες
+    duty = min_duty + int((angle / 180) * (max_duty - min_duty))
+    pwm.duty_u16(duty)
+    time.sleep(0.5) # Περίμενε να φτάσει το servo
+    pwm.deinit() # Κλείσε το σήμα για να μην τρέμει (jitter)
+
+def push_syringe(servo_pin):
+    """
+    Πατάει τη σύριγγα κατά 'SERVO_1ML_ANGLE' μοίρες για να βγάλει 1 δόση.
+    Pushes the syringe to dispense 1 dose (~1mL).
+    """
+    # Σημείωση: Στην πραγματικότητα η σύριγγα πρέπει να κρατάει "μνήμη" της θέσης της.
+    # Για τώρα, κάνουμε μια απλή κίνηση: Πάτα και γύρνα πίσω (ή απλά προχώρα).
+    # Βάση του manual σας, θέλετε να προχωράει 1 δόση κάθε φορά.
+    
+    print(f"Ενεργοποίηση Σύριγγας (Pin {servo_pin}). Παροχή 1mL...")
+    # Υποθέτουμε ότι το servo ξεκινάει από το 0. Πατάει 20 μοίρες, και μένει εκεί.
+    # ΠΡΟΣΟΧΗ: Αν το κάνετε έτσι, μετά από 9 δόσεις (9*20=180) το servo τερματίζει
+    # και θα χρειαστεί να το γυρίσετε στο 0 χειροκίνητα γεμίζοντας τη σύριγγα!
+    set_servo_angle(servo_pin, SERVO_1ML_ANGLE)
+    time.sleep(1)
+    # Προαιρετικά: Επιστροφή στο 0. (Ανάλογα πώς έχετε φτιάξει το 3D print)
+    set_servo_angle(servo_pin, 0)
+
+# =========================================================
+# 5. ADS1015 & SENSORS FUNCTIONS - Διάβασμα Αισθητήρων
+# =========================================================
+
 ADS1015_REG_CONVERSION = 0x00
 ADS1015_REG_CONFIG     = 0x01
-
-# ADS1015 configuration bits for single-ended reads
-# Format: OS=1 (start conversion), MUX (channel), PGA=4.096V, MODE=single-shot,
-#         DR=1600 SPS, COMP_QUE=disabled
 ADS1015_CONFIG_BASE = 0x8583
-
-# Channel selection bits (MUX bits in config register)
-# A0=100, A1=101, A2=110, A3=111 (shifted to bits 14-12)
-ADS1015_MUX = {
-    0: 0x4000,  # A0
-    1: 0x5000,  # A1
-    2: 0x6000,  # A2
-    3: 0x7000,  # A3
-}
+ADS1015_MUX = {0: 0x4000, 1: 0x5000, 2: 0x6000, 3: 0x7000}
 
 def ads1015_read_channel(channel):
-    """
-    Read voltage from one channel (0-3) of the ADS1015.
-    Returns voltage in volts (0.0 to ~4.096V), or None on error.
-    """
-    if channel not in ADS1015_MUX:
-        print("Invalid ADS1015 channel:", channel)
-        return None
-
+    """Reads voltage from ADS1015."""
+    if channel not in ADS1015_MUX: return None
     try:
-        # Build the config register value for this channel
         config = ADS1015_CONFIG_BASE | ADS1015_MUX[channel]
-
-        # Write config register to start conversion
-        config_bytes = bytes([
-            ADS1015_REG_CONFIG,
-            (config >> 8) & 0xFF,
-            config & 0xFF
-        ])
+        config_bytes = bytes([ADS1015_REG_CONFIG, (config >> 8) & 0xFF, config & 0xFF])
         i2c.writeto(ADS1015_ADDR, config_bytes)
-
-        # Wait for conversion to complete (~1ms for 1600 SPS)
         time.sleep(0.005)
-
-        # Point to conversion register
         i2c.writeto(ADS1015_ADDR, bytes([ADS1015_REG_CONVERSION]))
-
-        # Read 2 bytes from conversion register
         data = i2c.readfrom(ADS1015_ADDR, 2)
-
-        # ADS1015 returns 12-bit value in upper bits of 16-bit register
         raw = (data[0] << 8) | data[1]
-        raw = raw >> 4  # Shift right 4 bits to get 12-bit value (0-2047 for positive)
-
-        # Handle negative values (two's complement, but we expect positives here)
-        if raw > 2047:
-            raw = raw - 4096
-
-        # Convert raw to voltage (PGA=4.096V, so 1 LSB = 4.096/2048 = 2mV)
-        voltage = raw * 4.096 / 2048
-        return voltage
-
+        raw = raw >> 4 
+        if raw > 2047: raw = raw - 4096
+        return raw * 4.096 / 2048
     except Exception as e:
-        print("ADS1015 read error on channel", channel, ":", e)
+        print("ADS1015 error:", e)
         return None
 
+def get_water_temp():
+    """
+    Reads the waterproof DS18B20 sensor.
+    """
+    if not roms: return -999
+    try:
+        ds_sensor.convert_temp()
+        time.sleep_ms(750) # Ο αισθητήρας θέλει 750ms να σκεφτεί
+        return ds_sensor.read_temp(roms[0])
+    except:
+        return -999
 
-# =========================================================
+def get_ph():
+    voltage = ads1015_read_channel(PH_CHANNEL)
+    if voltage is None: return -999
+    return 7 + (2.5 - voltage) / 0.18 
+
+def get_ec():
+    voltage = ads1015_read_channel(EC_CHANNEL)
+    if voltage is None: return -999
+    return voltage * 2.0 
+
+def get_turbidity():
+    voltage = ads1015_read_channel(TURBIDITY_CHANNEL)
+    if voltage is None: return -999
+    actual_voltage = voltage * 1.5 
+    if actual_voltage < 0.1: return 3000 
+    return 3000 / actual_voltage 
+
 # SHT31 TEMPERATURE & HUMIDITY SENSOR (I2C)
-# =========================================================
-
 def read_sht31():
     """
     Read temperature and humidity from SHT31.
@@ -179,388 +200,152 @@ def read_sht31():
         print("SHT31 read error:", e)
         return (None, None)
 
-
 # =========================================================
-# FLOW SENSOR PULSE COUNTING (interrupt-based)
+# 6. HELPER FUNCTIONS - Βοηθητικές
 # =========================================================
-
-flow_pulse_count = 0
-
-def flow_pulse_handler(pin):
-    """Called automatically on each pulse from the flow sensor."""
-    global flow_pulse_count
-    flow_pulse_count += 1
-
-flow_pin = Pin(FLOW_SENSOR_PIN, Pin.IN, Pin.PULL_UP)
-flow_pin.irq(trigger=Pin.IRQ_RISING, handler=flow_pulse_handler)
-
-
-# =========================================================
-# HELPER FUNCTIONS
-# =========================================================
-
-def read_digital(pin):
-    """Read digital pin value."""
-    return digitalRead(pin)
 
 def is_button_pressed():
     """Check if STOP button is pressed."""
-    return read_digital(STOP_BUTTON_PIN) == 1
+    p = Pin(STOP_BUTTON_PIN, Pin.IN, Pin.PULL_UP)
+    return p.value() == 0 # 0 σημαίνει ότι πατήθηκε (λόγω PULL_UP)
 
-def set_output(pin, state):
-    """Turn output pin ON (1) or OFF (0)."""
-    digitalWrite(pin, state)
-
-
-# =========================================================
-# SENSOR READING FUNCTIONS (using ADS1015 for analog)
-# =========================================================
-
-def get_moisture():
-    """
-    Read soil moisture as percentage (%) via ADS1015 channel A0.
-    Capacitive sensors output higher voltage when DRY,
-    so we invert: lower voltage = more moisture.
-    """
-    voltage = ads1015_read_channel(SOIL_MOISTURE_CHANNEL)
-    if voltage is None:
-        return -999
-
-    # Calibrate these voltage values for YOUR specific sensor:
-    # - Test in dry air -> note the voltage (e.g. ~3.0V)
-    # - Test in water  -> note the voltage (e.g. ~1.5V)
-    DRY_VOLTAGE = 3.0    # Voltage when sensor is in dry air
-    WET_VOLTAGE = 1.5    # Voltage when sensor is fully wet
-
-    # Map voltage to percentage (clamp to 0-100)
-    percent = (DRY_VOLTAGE - voltage) / (DRY_VOLTAGE - WET_VOLTAGE) * 100
-    if percent < 0:
-        percent = 0
-    if percent > 100:
-        percent = 100
-    return percent
-
-def get_ph():
-    """
-    Read pH value via ADS1015 channel A1.
-    Most pH probes output ~2.5V at pH 7, with ~59mV per pH unit.
-    CALIBRATE with pH 4.0 and pH 7.0 buffer solutions for accuracy!
-    """
-    voltage = ads1015_read_channel(PH_CHANNEL)
-    if voltage is None:
-        return -999
-
-    # Standard pH conversion formula (calibrate for your sensor!)
-    ph = 7 + (2.5 - voltage) / 0.18  # 0.18V per pH unit (typical)
-    return ph
-
-def get_ec():
-    """
-    Read electrical conductivity in mS/cm via ADS1015 channel A2.
-    Calibrate with a known EC standard solution!
-    """
-    voltage = ads1015_read_channel(EC_CHANNEL)
-    if voltage is None:
-        return -999
-
-    # Simple linear conversion (calibrate for your sensor!)
-    ec = voltage * 2.0  # Example - adjust based on calibration
-    return ec
-
-def get_turbidity():
-    """
-    Read turbidity in NTU via ADS1015 channel A3.
-    DFRobot Gravity sensor: clearer water = higher voltage.
-    NOTE: Sensor output is 5V, scaled down by voltage divider to ~3.3V max.
-    """
-    voltage = ads1015_read_channel(TURBIDITY_CHANNEL)
-    if voltage is None:
-        return -999
-
-    # If voltage divider is 1kΩ/2kΩ, multiply by ~1.5 to get original sensor voltage
-    actual_voltage = voltage * 1.5  # Adjust based on your divider ratio
-
-    # Approximate turbidity formula (calibrate for your sensor!)
-    if actual_voltage < 0.1:
-        ntu = 3000  # Sensor disconnected or extremely dirty
-    else:
-        ntu = 3000 / actual_voltage  # Calibrate against known samples!
-    return ntu
-
-def get_water_temp():
-    """Read water temperature (°C) from SHT31."""
-    temp, _ = read_sht31()
-    if temp is None:
-        return -999
-    return temp
-
-def get_humidity():
-    """Read tank-area humidity (%) from SHT31. Used to detect empty tank."""
-    _, hum = read_sht31()
-    if hum is None:
-        return -999
-    return hum
-
-def get_flow():
-    """
-    Get flow sensor pulse count from last interval, then reset.
-    Returns 0 if no water is flowing.
-    """
-    global flow_pulse_count
-    pulses = flow_pulse_count
-    flow_pulse_count = 0
-    return pulses
-
+def set_output(pin_num, state):
+    """Turn output pin ON (1) or OFF (0). (Χρησιμοποιείται για LEDs)"""
+    p = Pin(pin_num, Pin.OUT)
+    p.value(state)
 
 # =========================================================
-# HOMEOSTASIS FUNCTIONS
+# 7. HOMEOSTASIS FUNCTIONS - Ομοιόσταση (Με Servo πλέον)
 # =========================================================
 
 def ph_homeostasis():
-    """pH homeostasis (flowchart p.38)."""
     ph = get_ph()
     print("pH level:", ph)
-
-    if ph == -999:
-        print("pH sensor error - skipping")
-        return
+    if ph == -999: return
 
     if ph > PH_MAX:
-        print("pH too HIGH - adding citric acid")
-        set_output(PH_PUMP_ACID_PIN, 1)
-        time.sleep(2)
-        set_output(PH_PUMP_ACID_PIN, 0)
-        print("Citric acid added")
-
+        print("pH too HIGH - Pushing Citric Acid Syringe")
+        push_syringe(PH_ACID_SERVO_PIN)
     elif ph < PH_MIN:
-        print("pH too LOW - adding potassium bicarbonate")
-        set_output(PH_PUMP_BASE_PIN, 1)
-        time.sleep(2)
-        set_output(PH_PUMP_BASE_PIN, 0)
-        print("Potassium bicarbonate added")
-
-    else:
-        print("pH OK (5.5 - 6.5)")
+        print("pH too LOW - Pushing Potassium Bicarbonate Syringe")
+        push_syringe(PH_BASE_SERVO_PIN)
 
 def conductivity_homeostasis():
-    """EC homeostasis (flowchart p.38)."""
     ec = get_ec()
     print("EC level:", ec, "mS/cm")
-
-    if ec == -999:
-        print("EC sensor error - skipping")
-        return
+    if ec == -999: return
 
     if ec < EC_MIN:
-        print("EC too LOW - adding nutrient solution")
-        set_output(NUTRIENT_PUMP_PIN, 1)
-        time.sleep(3)
-        set_output(NUTRIENT_PUMP_PIN, 0)
-        print("Nutrients added")
-
+        print("EC too LOW - Pushing Nutrient Syringe")
+        push_syringe(NUTRIENT_SERVO_PIN)
     elif ec > EC_MAX:
-        print("EC too HIGH - adding fresh water (dilution)")
+        print("EC too HIGH - Adding fresh water")
         set_output(FRESH_WATER_PUMP_PIN, 1)
         time.sleep(5)
         set_output(FRESH_WATER_PUMP_PIN, 0)
-        print("Fresh water added")
 
-    else:
-        print("EC OK (1.0 - 2.0 mS/cm)")
-
-def turbidity_homeostasis():
-    """Turbidity homeostasis (flowchart p.39)."""
-    turbidity = get_turbidity()
-    print("Turbidity:", turbidity, "NTU")
-
-    if turbidity == -999:
-        print("Turbidity sensor error - skipping")
+def adjust_interval_by_weather():
+    """
+    Διαβάζει τον αισθητήρα SHT31 (αέρα) και προσαρμόζει 
+    δυναμικά το χρόνο αναμονής μεταξύ των ποτισμάτων.
+    """
+    global IRRIGATION_INTERVAL
+    
+    # Διαβάζουμε θερμοκρασία και υγρασία αέρα από τον SHT31
+    air_temp, air_hum = read_sht31()
+    
+    # Αν ο αισθητήρας έχει πρόβλημα, κρατάμε τον κανονικό χρόνο για ασφάλεια
+    if air_temp is None or air_hum is None:
+        IRRIGATION_INTERVAL = 1800 # 30 λεπτά
         return
 
-    if turbidity > TURBIDITY_MAX:
-        print("Water DIRTY - turning ON orange warning light")
-        set_output(ORANGE_LIGHT_PIN, 1)
+    print(f"[Smart Weather] Αέρας: {air_temp:.1f}°C, Υγρασία: {air_hum:.1f}%")
+
+    # ΣΕΝΑΡΙΟ 1: Ζεστό ή Ξηρό περιβάλλον (Το νερό εξατμίζεται γρήγορα)
+    # Αν η θερμοκρασία είναι πάνω από 28°C Ή η υγρασία κάτω από 40%
+    if air_temp > 28 or air_hum < 40:
+        IRRIGATION_INTERVAL = 900  # 15 λεπτά αναμονή (Ποτίζει πιο συχνά)
+        print("[Smart Weather] Κατάσταση: ΖΕΣΤΗ/ΞΗΡΗ -> Μείωση αναμονής στα 15 λεπτά.")
+        
+    # ΣΕΝΑΡΙΟ 2: Κρύο ή πολύ Υγρό περιβάλλον (Το νερό μένει στα πιατάκια)
+    # Αν η θερμοκρασία είναι κάτω από 18°C Ή η υγρασία πάνω από 75%
+    elif air_temp < 18 or air_hum > 75:
+        IRRIGATION_INTERVAL = 2700 # 45 λεπτά αναμονή (Ποτίζει πιο αραιά)
+        print("[Smart Weather] Κατάσταση: ΚΡΥΑ/ΥΓΡΗ -> Αυξηση αναμονής στα 45 λεπτά.")
+        
+    # ΣΕΝΑΡΙΟ 3: Ιδανικές/Κανονικές συνθήκες
     else:
-        print("Water clarity OK")
-        set_output(ORANGE_LIGHT_PIN, 0)
+        IRRIGATION_INTERVAL = 1800 # 30 λεπτά αναμονή
+        print("[Smart Weather] Κατάσταση: ΚΑΝΟΝΙΚΗ -> Αναμονή στα 30 λεπτά.")
 
-def flow_homeostasis():
-    """Flow homeostasis (flowchart p.39)."""
-    flow = get_flow()
-    print("Flow rate (pulses):", flow)
-
-    if flow == 0:
-        print("NO WATER FLOW detected!")
-        humidity = get_humidity()
-        print("Tank humidity:", humidity, "%")
-
-        if humidity != -999 and humidity < TANK_HUMIDITY_MIN:
-            print("TANK EMPTY - turning ON red warning light")
-            set_output(RED_LIGHT_PIN, 1)
-        else:
-            print("Pump may be broken - attempting restart")
-            set_output(WATER_PUMP_PIN, 0)
-            time.sleep(2)
-            set_output(WATER_PUMP_PIN, 1)
-            time.sleep(3)
-
-            new_flow = get_flow()
-            if new_flow > 0:
-                print("Pump restart SUCCESSFUL")
-                set_output(RED_LIGHT_PIN, 0)
-            else:
-                print("Pump restart FAILED - manual check needed")
-                set_output(RED_LIGHT_PIN, 1)
-
-def watertemp_homeostasis():
-    """Water temperature homeostasis (flowchart p.40)."""
-    temp = get_water_temp()
-    print("Water temperature:", temp, "°C")
-
-    if temp == -999:
-        print("Temperature sensor error - skipping")
-        return
-
-    if temp > WATER_TEMP_MAX:
-        print("Water too HOT - activating cooling fan")
-        set_output(FAN_PIN, 1)
-    elif temp < WATER_TEMP_MIN:
-        print("Water cooled down - turning OFF fan")
-        set_output(FAN_PIN, 0)
-    else:
-        print("Water temperature OK")
-
-
-# =========================================================
-# IRRIGATION CONTROL
-# =========================================================
 
 def check_and_water():
-    """Soil moisture check & irrigation control (flowchart p.25)."""
-    moisture = get_moisture()
-    print("Soil moisture:", moisture, "%")
-
-    if moisture == -999:
-        print("Moisture sensor error - skipping irrigation check")
-        return
-
-    if moisture < MOISTURE_MIN:
-        print("Soil too DRY - starting water pump")
-        set_output(WATER_PUMP_PIN, 1)
-    elif moisture >= MOISTURE_TARGET:
-        print("Soil moist enough - stopping water pump")
-        set_output(WATER_PUMP_PIN, 0)
-
-
+    """
+    Έλεγχος ποτίσματος με βάση το χρόνο ΚΑΙ τον καιρό περιβάλλοντος.
+    """
+    global last_water_time, is_watering
+    current_time = time.time()
+    
+    # Πριν ελέγξουμε αν ήρθε η ώρα, προσαρμόζουμε το Interval βάσει καιρού
+    if not is_watering:
+        adjust_interval_by_weather()
+        
+        if current_time - last_water_time >= IRRIGATION_INTERVAL:
+            print("-> Ξεκινάω την αντλία νερού!")
+            set_output(WATER_PUMP_PIN, 1)
+            is_watering = True
+            last_water_time = current_time 
+        else:
+            time_left = IRRIGATION_INTERVAL - (current_time - last_water_time)
+            print(f"-> Επόμενο πότισμα σε: {int(time_left / 60)} λεπτά (Interval: {int(IRRIGATION_INTERVAL/60)}μ)")
+            
+    elif is_watering:
+        if current_time - last_water_time >= IRRIGATION_DURATION:
+            print("-> Το πότισμα ολοκληρώθηκε. Κλείνω την αντλία.")
+            set_output(WATER_PUMP_PIN, 0)
+            is_watering = False
+            last_water_time = current_time 
+        else:
+            time_left = IRRIGATION_DURATION - (current_time - last_water_time)
+            print(f"-> Πότισμα σε εξέλιξη... Απομένουν {int(time_left)} δευτερόλεπτα.")
+            
 # =========================================================
 # MAIN PROGRAM
 # =========================================================
-
 def main():
     print("=" * 50)
     print("Chloroplasters Tower Garden - Starting...")
     print("=" * 50)
-
-    # Initialize all outputs to OFF for safety
+    
+    # Initialize all DC Pumps to OFF
     set_output(WATER_PUMP_PIN, 0)
-    set_output(PH_PUMP_ACID_PIN, 0)
-    set_output(PH_PUMP_BASE_PIN, 0)
-    set_output(NUTRIENT_PUMP_PIN, 0)
     set_output(FRESH_WATER_PUMP_PIN, 0)
     set_output(FAN_PIN, 0)
-    set_output(RED_LIGHT_PIN, 0)
-    set_output(ORANGE_LIGHT_PIN, 0)
 
-    time.sleep(2)
-
-    # Scan I2C bus to verify devices are connected
-    print("\nScanning I2C bus...")
-    devices = i2c.scan()
-    print("Found I2C devices at addresses:", [hex(d) for d in devices])
-
-    if ADS1015_ADDR in devices:
-        print("ADS1015 detected at 0x48 -> OK")
-    else:
-        print("WARNING: ADS1015 NOT FOUND - check wiring on Qwiic 0!")
-
-    if SHT31_ADDR in devices:
-        print("SHT31 detected at 0x44 -> OK")
-    else:
-        print("WARNING: SHT31 NOT FOUND - check wiring on Qwiic 1!")
-
-    # Quick initial sensor check
-    t, h = read_sht31()
-    if t is not None:
-        print("Initial SHT31 reading -> Temp:", t, "°C, Humidity:", h, "%")
-
-    # Main monitoring loop
     while True:
-        print("\n" + "=" * 50)
-        print("New monitoring cycle")
-        print("=" * 50)
-
-        # Check STOP button
         if is_button_pressed():
-            print("STOP button pressed - shutting down system")
+            print("STOP BUTTON PRESSED! Shutting down...")
             set_output(WATER_PUMP_PIN, 0)
             set_output(FAN_PIN, 0)
             break
-
-        print("\n--- Reading Sensors ---")
-
-        # 1. Irrigation check
+            
+        # 1. Έξυπνο Πότισμα
         check_and_water()
 
-        # 2. pH check
-        ph = get_ph()
-        if ph != -999 and (ph < PH_MIN or ph > PH_MAX):
-            print("pH out of range!")
-            ph_homeostasis()
-        else:
-            print("pH within range (5.5 - 6.5)")
-
-        # 3. EC check
-        ec = get_ec()
-        if ec != -999 and (ec < EC_MIN or ec > EC_MAX):
-            print("EC out of range!")
-            conductivity_homeostasis()
-        else:
-            print("EC within range (1.0 - 2.0 mS/cm)")
-
-        # 4. Turbidity check
-        turbidity = get_turbidity()
-        if turbidity != -999 and turbidity > TURBIDITY_MAX:
-            print("Turbidity too high!")
-            turbidity_homeostasis()
-        else:
-            print("Turbidity OK (< 30 NTU)")
-            set_output(ORANGE_LIGHT_PIN, 0)
-
-        # 5. Water temperature check
-        temp = get_water_temp()
-        if temp != -999 and temp > WATER_TEMP_MAX:
-            print("Water too hot!")
-            watertemp_homeostasis()
-        else:
-            print("Water temperature OK")
-            if temp != -999 and temp < WATER_TEMP_MIN:
-                set_output(FAN_PIN, 0)
-
-        # 6. Flow check
-        flow = get_flow()
-        if flow == 0:
-            print("No flow detected!")
-            flow_homeostasis()
-        else:
-            print("Water flow OK (", flow, "pulses)")
-            set_output(RED_LIGHT_PIN, 0)
-
-        print("\n--- Cycle complete. Waiting 10 seconds ---")
-        time.sleep(10)
-
-    print("System stopped. Goodbye!")
-
-
-=========================================
+        # 2. Έλεγχος pH & EC
+        ph_homeostasis()
+        conductivity_homeostasis()
+        
+        # 3. Έλεγχος θερμοκρασίας νερού (για τον ανεμιστήρα)
+        water_temp = get_water_temp()
+        if water_temp != -999:
+            if water_temp > WATER_TEMP_MAX:
+                set_output(FAN_PIN, 1) # Άναψε ανεμιστήρα
+            elif water_temp < WATER_TEMP_MIN:
+                set_output(FAN_PIN, 0) # Σβήσε ανεμιστήρα
+        
+        # Προτείνω μικρότερο sleep (π.χ. 2 δευτερόλεπτα) 
+        # ώστε το Stop Button να ανταποκρίνεται πιο άμεσα.
+        time.sleep(2) 
 
 main()
