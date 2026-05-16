@@ -1,128 +1,166 @@
+
 # XRP Tower Garden Control System
-# Chloroplasters 
+# Chloroplasters
+
 
 from xrp import *
 from machine import Pin, I2C
 import time
 
 
-# ============================================
-# PIN SETUP
-# ============================================
+# PIN SETUP - XRP Controller
 
-# --- I2C bus for SHT31 (temperature + humidity) ---
-SHT31_SDA_PIN = 13         # Green wire -> IO13
-SHT31_SCL_PIN = 14         # Yellow wire -> IO14
-SHT31_ADDR    = 0x44       # Default I2C address for SHT31
+# --- I2C bus configuration ---
+# Both ADS1015 and SHT31 share the same I2C bus.
+# We use I2C bus 0 with SDA=IO4, SCL=IO5 (Qwiic 0 connector).
+# The SHT31 can be daisy-chained on Qwiic 1 (IO38/IO39 = I2C bus 1).
+I2C_SDA_PIN = 4    # IO4 -> Qwiic 0 SDA
+I2C_SCL_PIN = 5    # IO5 -> Qwiic 0 SCL
 
-# --- Analog sensors ---
-SOIL_MOISTURE_PIN  = 0     # Capacitive soil moisture sensor
-PH_SENSOR_PIN      = 1     # pH sensor (analog)
-EC_SENSOR_PIN      = 2     # Conductivity sensor (analog)
-TURBIDITY_SENSOR_PIN = 9   # DFRobot Gravity Turbidity -> IO9 (blue wire)
+# I2C device addresses
+ADS1015_ADDR = 0x48   # Default address of SparkFun ADS1015
+SHT31_ADDR   = 0x44   # Default address of SHT31
+
+# --- Analog sensor channels on ADS1015 ---
+# These are NOT XRP pins - they're channel numbers on the ADS1015 chip.
+SOIL_MOISTURE_CHANNEL = 0    # ADS1015 A0
+PH_CHANNEL            = 1    # ADS1015 A1
+EC_CHANNEL            = 2    # ADS1015 A2
+TURBIDITY_CHANNEL     = 3    # ADS1015 A3 (via voltage divider 5V->3.3V!)
 
 # --- Digital sensors ---
-FLOW_SENSOR_PIN    = 2     # Water flow sensor pulse output -> IO2 (yellow wire)
+FLOW_SENSOR_PIN = 2    # IO2 -> Flow sensor pulse output (yellow wire)
+                       #         VCC=5V, GND=GND
 
-# --- Outputs (pumps, lights, fan) ---
-WATER_PUMP_PIN       = 0   # Main irrigation pump
-PH_PUMP_ACID_PIN     = 1   # Pump for citric acid (pH too high)
-PH_PUMP_BASE_PIN     = 2   # Pump for potassium bicarbonate (pH too low)
-NUTRIENT_PUMP_PIN    = 3   # Pump for nutrient solution
-FRESH_WATER_PUMP_PIN = 4   # Pump for fresh water (dilution)
-FAN_PIN              = 5   # Cooling fan for water
-RED_LIGHT_PIN        = 6   # Red LED - tank empty warning
-ORANGE_LIGHT_PIN     = 7   # Orange LED - replace water warning
+# --- Outputs (pumps + fan, all via relay modules) ---
+WATER_PUMP_PIN       = 12   # IO12 -> Relay (main irrigation pump)
+PH_PUMP_ACID_PIN     = 15   # IO15 -> Relay (citric acid pump)
+PH_PUMP_BASE_PIN     = 16   # IO16 -> Relay (potassium bicarbonate pump)
+NUTRIENT_PUMP_PIN    = 17   # IO17 -> Relay (nutrient pump)
+FRESH_WATER_PUMP_PIN = 18   # IO18 -> Relay (fresh water pump)
+FAN_PIN              = 19   # IO19 -> Relay/MOSFET (cooling fan)
 
-# Button to stop the system
-STOP_BUTTON_PIN = 8
+# --- Outputs (LEDs with 220Ω current-limiting resistors) ---
+RED_LIGHT_PIN    = 22   # IO22 -> Red LED (tank empty / pump failure)
+ORANGE_LIGHT_PIN = 23   # IO23 -> Orange LED (water needs replacing)
 
-
-# ============================================
-# THRESHOLD VALUES - From flowcharts
-# ============================================
-
-MOISTURE_MIN     = 35      # % - turn pump ON below this
-MOISTURE_TARGET  = 60      # % - turn pump OFF at this
-PH_MIN           = 5.5     # pH too low
-PH_MAX           = 6.5     # pH too high
-EC_MIN           = 1.0     # mS/cm - too little nutrients
-EC_MAX           = 2.0     # mS/cm - too many nutrients
-TURBIDITY_MAX    = 30      # NTU - water too dirty
-WATER_TEMP_MAX   = 30      # °C - turn fan ON
-WATER_TEMP_MIN   = 26      # °C - turn fan OFF
-TANK_HUMIDITY_MIN = 5      # % - below this means tank is empty
+# --- Stop button (built-in USER button on XRP) ---
+STOP_BUTTON_PIN = 36    # IO36 -> Built-in USER button
 
 
-# ============================================
-# I2C SETUP FOR SHT31
-# ============================================
+# =========================================================
+# THRESHOLD VALUES (from project flowcharts)
+# =========================================================
 
-# Initialize I2C bus once at startup
-i2c = I2C(0, scl=Pin(SHT31_SCL_PIN), sda=Pin(SHT31_SDA_PIN), freq=100000)
-
-
-# ============================================
-# FLOW SENSOR PULSE COUNTING
-# ============================================
-# The flow sensor outputs digital pulses - one pulse per small amount of water.
-# We count pulses using an interrupt so we don't miss any.
-
-flow_pulse_count = 0
-
-def flow_pulse_handler(pin):
-    """Interrupt handler - called every time a pulse arrives from flow sensor."""
-    global flow_pulse_count
-    flow_pulse_count += 1
-
-# Set up the flow sensor pin with an interrupt on rising edge
-flow_pin = Pin(FLOW_SENSOR_PIN, Pin.IN, Pin.PULL_UP)
-flow_pin.irq(trigger=Pin.IRQ_RISING, handler=flow_pulse_handler)
+MOISTURE_MIN      = 35     # %    - below this -> pump ON
+MOISTURE_TARGET   = 60     # %    - at this    -> pump OFF
+PH_MIN            = 5.5    # pH   - too low
+PH_MAX            = 6.5    # pH   - too high
+EC_MIN            = 1.0    # mS/cm - too few nutrients
+EC_MAX            = 2.0    # mS/cm - too many nutrients
+TURBIDITY_MAX     = 30     # NTU   - water too dirty
+WATER_TEMP_MAX    = 30     # °C    - turn fan ON
+WATER_TEMP_MIN    = 26     # °C    - turn fan OFF
+TANK_HUMIDITY_MIN = 5      # %     - below this -> tank empty
 
 
-# ============================================
-# HELPER FUNCTIONS
-# ============================================
+# =========================================================
+# I2C BUS INITIALIZATION
+# =========================================================
 
-def read_sensor(pin):
-    """Read analog sensor value (0-1023)"""
-    return analogRead(pin)
-
-def read_digital(pin):
-    """Read digital sensor value"""
-    return digitalRead(pin)
-
-def is_button_pressed():
-    """Check if stop button is pressed"""
-    return read_digital(STOP_BUTTON_PIN) == 1
-
-def set_output(pin, state):
-    """Turn output pin ON (1) or OFF (0)"""
-    digitalWrite(pin, state)
+i2c = I2C(0, scl=Pin(I2C_SCL_PIN), sda=Pin(I2C_SDA_PIN), freq=100000)
 
 
-# ============================================
-# SHT31 SENSOR FUNCTIONS (I2C)
-# ============================================
+# =========================================================
+# ADS1015 ANALOG-TO-DIGITAL CONVERTER FUNCTIONS
+# =========================================================
+# The ADS1015 is a 12-bit ADC with 4 channels (A0-A3).
+# We talk to it over I2C to read analog voltages.
+
+# ADS1015 register addresses
+ADS1015_REG_CONVERSION = 0x00
+ADS1015_REG_CONFIG     = 0x01
+
+# ADS1015 configuration bits for single-ended reads
+# Format: OS=1 (start conversion), MUX (channel), PGA=4.096V, MODE=single-shot,
+#         DR=1600 SPS, COMP_QUE=disabled
+ADS1015_CONFIG_BASE = 0x8583
+
+# Channel selection bits (MUX bits in config register)
+# A0=100, A1=101, A2=110, A3=111 (shifted to bits 14-12)
+ADS1015_MUX = {
+    0: 0x4000,  # A0
+    1: 0x5000,  # A1
+    2: 0x6000,  # A2
+    3: 0x7000,  # A3
+}
+
+def ads1015_read_channel(channel):
+    """
+    Read voltage from one channel (0-3) of the ADS1015.
+    Returns voltage in volts (0.0 to ~4.096V), or None on error.
+    """
+    if channel not in ADS1015_MUX:
+        print("Invalid ADS1015 channel:", channel)
+        return None
+
+    try:
+        # Build the config register value for this channel
+        config = ADS1015_CONFIG_BASE | ADS1015_MUX[channel]
+
+        # Write config register to start conversion
+        config_bytes = bytes([
+            ADS1015_REG_CONFIG,
+            (config >> 8) & 0xFF,
+            config & 0xFF
+        ])
+        i2c.writeto(ADS1015_ADDR, config_bytes)
+
+        # Wait for conversion to complete (~1ms for 1600 SPS)
+        time.sleep(0.005)
+
+        # Point to conversion register
+        i2c.writeto(ADS1015_ADDR, bytes([ADS1015_REG_CONVERSION]))
+
+        # Read 2 bytes from conversion register
+        data = i2c.readfrom(ADS1015_ADDR, 2)
+
+        # ADS1015 returns 12-bit value in upper bits of 16-bit register
+        raw = (data[0] << 8) | data[1]
+        raw = raw >> 4  # Shift right 4 bits to get 12-bit value (0-2047 for positive)
+
+        # Handle negative values (two's complement, but we expect positives here)
+        if raw > 2047:
+            raw = raw - 4096
+
+        # Convert raw to voltage (PGA=4.096V, so 1 LSB = 4.096/2048 = 2mV)
+        voltage = raw * 4.096 / 2048
+        return voltage
+
+    except Exception as e:
+        print("ADS1015 read error on channel", channel, ":", e)
+        return None
+
+
+# =========================================================
+# SHT31 TEMPERATURE & HUMIDITY SENSOR (I2C)
+# =========================================================
 
 def read_sht31():
     """
-    Read temperature and humidity from the SHT31 sensor over I2C.
-    Returns a tuple: (temperature_C, humidity_percent)
+    Read temperature and humidity from SHT31.
+    Returns tuple: (temperature_C, humidity_percent)
     Returns (None, None) on read failure.
     """
     try:
-        # Send measurement command: high repeatability, no clock stretching
+        # Send measurement command (high repeatability, no clock stretching)
         i2c.writeto(SHT31_ADDR, b'\x24\x00')
         time.sleep(0.02)  # Wait ~20ms for measurement
         data = i2c.readfrom(SHT31_ADDR, 6)
 
-        # Bytes 0-1: temperature, byte 2: CRC
-        # Bytes 3-4: humidity, byte 5: CRC
         temp_raw = (data[0] << 8) | data[1]
         hum_raw  = (data[3] << 8) | data[4]
 
-        # Convert per SHT31 datasheet
         temperature = -45 + (175 * temp_raw / 65535)
         humidity    = 100 * hum_raw / 65535
         return (temperature, humidity)
@@ -131,82 +169,150 @@ def read_sht31():
         return (None, None)
 
 
-# ============================================
-# SENSOR READING FUNCTIONS
-# ============================================
+# =========================================================
+# FLOW SENSOR PULSE COUNTING (interrupt-based)
+# =========================================================
+
+flow_pulse_count = 0
+
+def flow_pulse_handler(pin):
+    """Called automatically on each pulse from the flow sensor."""
+    global flow_pulse_count
+    flow_pulse_count += 1
+
+flow_pin = Pin(FLOW_SENSOR_PIN, Pin.IN, Pin.PULL_UP)
+flow_pin.irq(trigger=Pin.IRQ_RISING, handler=flow_pulse_handler)
+
+
+# =========================================================
+# HELPER FUNCTIONS
+# =========================================================
+
+def read_digital(pin):
+    """Read digital pin value."""
+    return digitalRead(pin)
+
+def is_button_pressed():
+    """Check if STOP button is pressed."""
+    return read_digital(STOP_BUTTON_PIN) == 1
+
+def set_output(pin, state):
+    """Turn output pin ON (1) or OFF (0)."""
+    digitalWrite(pin, state)
+
+
+# =========================================================
+# SENSOR READING FUNCTIONS (using ADS1015 for analog)
+# =========================================================
 
 def get_moisture():
-    """Read soil moisture percentage"""
-    raw = read_sensor(SOIL_MOISTURE_PIN)
-    # Capacitive: higher raw = drier, so invert
-    percent = 100 - (raw / 1023 * 100)
+    """
+    Read soil moisture as percentage (%) via ADS1015 channel A0.
+    Capacitive sensors output higher voltage when DRY,
+    so we invert: lower voltage = more moisture.
+    """
+    voltage = ads1015_read_channel(SOIL_MOISTURE_CHANNEL)
+    if voltage is None:
+        return -999
+
+    # Calibrate these voltage values for YOUR specific sensor:
+    # - Test in dry air -> note the voltage (e.g. ~3.0V)
+    # - Test in water  -> note the voltage (e.g. ~1.5V)
+    DRY_VOLTAGE = 3.0    # Voltage when sensor is in dry air
+    WET_VOLTAGE = 1.5    # Voltage when sensor is fully wet
+
+    # Map voltage to percentage (clamp to 0-100)
+    percent = (DRY_VOLTAGE - voltage) / (DRY_VOLTAGE - WET_VOLTAGE) * 100
+    if percent < 0:
+        percent = 0
+    if percent > 100:
+        percent = 100
     return percent
 
 def get_ph():
-    """Read pH value from sensor"""
-    raw = read_sensor(PH_SENSOR_PIN)
-    voltage = raw / 1023 * 3.3  # XRP uses 3.3V
-    ph = 7 + (2.5 - voltage) * 3.5  # Adjust formula based on your sensor
+    """
+    Read pH value via ADS1015 channel A1.
+    Most pH probes output ~2.5V at pH 7, with ~59mV per pH unit.
+    CALIBRATE with pH 4.0 and pH 7.0 buffer solutions for accuracy!
+    """
+    voltage = ads1015_read_channel(PH_CHANNEL)
+    if voltage is None:
+        return -999
+
+    # Standard pH conversion formula (calibrate for your sensor!)
+    ph = 7 + (2.5 - voltage) / 0.18  # 0.18V per pH unit (typical)
     return ph
 
 def get_ec():
-    """Read electrical conductivity in mS/cm"""
-    raw = read_sensor(EC_SENSOR_PIN)
-    voltage = raw / 1023 * 3.3
-    ec = voltage * 2  # Example conversion - calibrate!
+    """
+    Read electrical conductivity in mS/cm via ADS1015 channel A2.
+    Calibrate with a known EC standard solution!
+    """
+    voltage = ads1015_read_channel(EC_CHANNEL)
+    if voltage is None:
+        return -999
+
+    # Simple linear conversion (calibrate for your sensor!)
+    ec = voltage * 2.0  # Example - adjust based on calibration
     return ec
 
 def get_turbidity():
     """
-    Read turbidity from DFRobot Gravity Analog Turbidity Sensor (IO9).
-    Sensor is powered at 5V but output is read by the XRP ADC.
-    Cleaner water -> higher voltage; dirty water -> lower voltage.
+    Read turbidity in NTU via ADS1015 channel A3.
+    DFRobot Gravity sensor: clearer water = higher voltage.
+    NOTE: Sensor output is 5V, scaled down by voltage divider to ~3.3V max.
     """
-    raw = read_sensor(TURBIDITY_SENSOR_PIN)
-    voltage = raw / 1023 * 3.3
-    # DFRobot's typical curve (calibrate for your unit):
-    # NTU = -1120.4 * V^2 + 5742.3 * V - 4353.8  (when V > ~2.5)
-    # For simplicity and safety, use a basic inverse relationship:
-    if voltage < 0.1:
-        ntu = 3000  # Very dirty / sensor disconnected
+    voltage = ads1015_read_channel(TURBIDITY_CHANNEL)
+    if voltage is None:
+        return -999
+
+    # If voltage divider is 1kΩ/2kΩ, multiply by ~1.5 to get original sensor voltage
+    actual_voltage = voltage * 1.5  # Adjust based on your divider ratio
+
+    # Approximate turbidity formula (calibrate for your sensor!)
+    if actual_voltage < 0.1:
+        ntu = 3000  # Sensor disconnected or extremely dirty
     else:
-        ntu = 3000 / voltage  # Calibrate against known samples!
+        ntu = 3000 / actual_voltage  # Calibrate against known samples!
     return ntu
 
 def get_water_temp():
-    """Read water temperature in Celsius from SHT31."""
+    """Read water temperature (°C) from SHT31."""
     temp, _ = read_sht31()
     if temp is None:
-        return -999  # Error sentinel
+        return -999
     return temp
 
 def get_humidity():
-    """Read humidity (%) from SHT31 - used to check if tank is empty."""
+    """Read tank-area humidity (%) from SHT31. Used to detect empty tank."""
     _, hum = read_sht31()
     if hum is None:
-        return -999  # Error sentinel
+        return -999
     return hum
 
 def get_flow():
     """
-    Get water flow by reading the pulse count from the last interval.
-    Returns the number of pulses counted since last call, then resets.
-    A value of 0 means no water is flowing.
+    Get flow sensor pulse count from last interval, then reset.
+    Returns 0 if no water is flowing.
     """
     global flow_pulse_count
     pulses = flow_pulse_count
-    flow_pulse_count = 0  # Reset for next measurement window
+    flow_pulse_count = 0
     return pulses
 
 
-# ============================================
-# HOMEOSTASIS FUNCTIONS - From flowcharts
-# ============================================
+# =========================================================
+# HOMEOSTASIS FUNCTIONS
+# =========================================================
 
 def ph_homeostasis():
-    """pH homeostasis (flowchart p.38)"""
+    """pH homeostasis (flowchart p.38)."""
     ph = get_ph()
     print("pH level:", ph)
+
+    if ph == -999:
+        print("pH sensor error - skipping")
+        return
 
     if ph > PH_MAX:
         print("pH too HIGH - adding citric acid")
@@ -223,12 +329,16 @@ def ph_homeostasis():
         print("Potassium bicarbonate added")
 
     else:
-        print("pH is OK (5.5 - 6.5)")
+        print("pH OK (5.5 - 6.5)")
 
 def conductivity_homeostasis():
-    """EC homeostasis (flowchart p.38)"""
+    """EC homeostasis (flowchart p.38)."""
     ec = get_ec()
     print("EC level:", ec, "mS/cm")
+
+    if ec == -999:
+        print("EC sensor error - skipping")
+        return
 
     if ec < EC_MIN:
         print("EC too LOW - adding nutrient solution")
@@ -238,33 +348,33 @@ def conductivity_homeostasis():
         print("Nutrients added")
 
     elif ec > EC_MAX:
-        print("EC too HIGH - adding fresh water to dilute")
+        print("EC too HIGH - adding fresh water (dilution)")
         set_output(FRESH_WATER_PUMP_PIN, 1)
         time.sleep(5)
         set_output(FRESH_WATER_PUMP_PIN, 0)
         print("Fresh water added")
 
     else:
-        print("EC is OK (1.0 - 2.0 mS/cm)")
+        print("EC OK (1.0 - 2.0 mS/cm)")
 
 def turbidity_homeostasis():
-    """Turbidity homeostasis (flowchart p.39)"""
+    """Turbidity homeostasis (flowchart p.39)."""
     turbidity = get_turbidity()
     print("Turbidity:", turbidity, "NTU")
 
+    if turbidity == -999:
+        print("Turbidity sensor error - skipping")
+        return
+
     if turbidity > TURBIDITY_MAX:
-        print("Water is DIRTY - turn on ORANGE warning light")
+        print("Water DIRTY - turning ON orange warning light")
         set_output(ORANGE_LIGHT_PIN, 1)
     else:
-        print("Water clarity is OK")
+        print("Water clarity OK")
         set_output(ORANGE_LIGHT_PIN, 0)
 
 def flow_homeostasis():
-    """
-    Flow homeostasis (flowchart p.39)
-    - Flow = 0 + tank humidity very low -> tank empty (red light)
-    - Flow = 0 + humidity normal       -> pump issue, attempt restart
-    """
+    """Flow homeostasis (flowchart p.39)."""
     flow = get_flow()
     print("Flow rate (pulses):", flow)
 
@@ -274,28 +384,25 @@ def flow_homeostasis():
         print("Tank humidity:", humidity, "%")
 
         if humidity != -999 and humidity < TANK_HUMIDITY_MIN:
-            # Tank is empty
-            print("TANK IS EMPTY - turn on RED warning light")
+            print("TANK EMPTY - turning ON red warning light")
             set_output(RED_LIGHT_PIN, 1)
         else:
-            # Tank has water but pump not working
             print("Pump may be broken - attempting restart")
             set_output(WATER_PUMP_PIN, 0)
             time.sleep(2)
             set_output(WATER_PUMP_PIN, 1)
             time.sleep(3)
 
-            # Check if flow restored
             new_flow = get_flow()
             if new_flow > 0:
                 print("Pump restart SUCCESSFUL")
                 set_output(RED_LIGHT_PIN, 0)
             else:
-                print("Pump restart FAILED - needs manual check")
+                print("Pump restart FAILED - manual check needed")
                 set_output(RED_LIGHT_PIN, 1)
 
 def watertemp_homeostasis():
-    """Water temperature homeostasis (flowchart p.40)"""
+    """Water temperature homeostasis (flowchart p.40)."""
     temp = get_water_temp()
     print("Water temperature:", temp, "°C")
 
@@ -306,43 +413,44 @@ def watertemp_homeostasis():
     if temp > WATER_TEMP_MAX:
         print("Water too HOT - activating cooling fan")
         set_output(FAN_PIN, 1)
-
     elif temp < WATER_TEMP_MIN:
-        print("Water cooled down - turning off fan")
+        print("Water cooled down - turning OFF fan")
         set_output(FAN_PIN, 0)
-
     else:
-        print("Water temperature is OK")
+        print("Water temperature OK")
 
 
-# ============================================
-# MAIN IRRIGATION FUNCTION
-# ============================================
+# =========================================================
+# IRRIGATION CONTROL
+# =========================================================
 
 def check_and_water():
-    """Main irrigation control (flowchart p.25)"""
+    """Soil moisture check & irrigation control (flowchart p.25)."""
     moisture = get_moisture()
     print("Soil moisture:", moisture, "%")
+
+    if moisture == -999:
+        print("Moisture sensor error - skipping irrigation check")
+        return
 
     if moisture < MOISTURE_MIN:
         print("Soil too DRY - starting water pump")
         set_output(WATER_PUMP_PIN, 1)
-
     elif moisture >= MOISTURE_TARGET:
         print("Soil moist enough - stopping water pump")
         set_output(WATER_PUMP_PIN, 0)
 
 
-# ============================================
-# MAIN PROGRAM - Matches flowchart p.36
-# ============================================
+# =========================================================
+# MAIN PROGRAM
+# =========================================================
 
 def main():
-    print("=" * 40)
-    print("Chloroplasters Tower Garden Starting...")
-    print("=" * 40)
+    print("=" * 50)
+    print("Chloroplasters Tower Garden - Starting...")
+    print("=" * 50)
 
-    # Initialize all outputs to OFF
+    # Initialize all outputs to OFF for safety
     set_output(WATER_PUMP_PIN, 0)
     set_output(PH_PUMP_ACID_PIN, 0)
     set_output(PH_PUMP_BASE_PIN, 0)
@@ -352,84 +460,96 @@ def main():
     set_output(RED_LIGHT_PIN, 0)
     set_output(ORANGE_LIGHT_PIN, 0)
 
-    time.sleep(2)  # Startup delay
+    time.sleep(2)
 
-    # Quick sanity check on SHT31
+    # Scan I2C bus to verify devices are connected
+    print("\nScanning I2C bus...")
+    devices = i2c.scan()
+    print("Found I2C devices at addresses:", [hex(d) for d in devices])
+
+    if ADS1015_ADDR in devices:
+        print("ADS1015 detected at 0x48 -> OK")
+    else:
+        print("WARNING: ADS1015 NOT FOUND - check wiring on Qwiic 0!")
+
+    if SHT31_ADDR in devices:
+        print("SHT31 detected at 0x44 -> OK")
+    else:
+        print("WARNING: SHT31 NOT FOUND - check wiring on Qwiic 1!")
+
+    # Quick initial sensor check
     t, h = read_sht31()
     if t is not None:
-        print("SHT31 OK -> temp:", t, "°C, humidity:", h, "%")
-    else:
-        print("WARNING: SHT31 not responding - check wiring on IO13/IO14")
+        print("Initial SHT31 reading -> Temp:", t, "°C, Humidity:", h, "%")
 
+    # Main monitoring loop
     while True:
-        print("\n" + "=" * 40)
+        print("\n" + "=" * 50)
         print("New monitoring cycle")
-        print("=" * 40)
+        print("=" * 50)
 
-        # STEP 1: Check stop button (p.36)
+        # Check STOP button
         if is_button_pressed():
-            print("STOP BUTTON PRESSED - Shutting down system")
+            print("STOP button pressed - shutting down system")
             set_output(WATER_PUMP_PIN, 0)
             set_output(FAN_PIN, 0)
             break
 
-        # STEP 2: Read sensors (p.36)
         print("\n--- Reading Sensors ---")
 
-        # Always check irrigation first
+        # 1. Irrigation check
         check_and_water()
 
-        # STEP 3: pH check (p.36)
+        # 2. pH check
         ph = get_ph()
-        if ph < PH_MIN or ph > PH_MAX:
-            print("pH out of range! Calling ph_homeostasis()")
+        if ph != -999 and (ph < PH_MIN or ph > PH_MAX):
+            print("pH out of range!")
             ph_homeostasis()
         else:
-            print("pH is within range (5.5 - 6.5)")
+            print("pH within range (5.5 - 6.5)")
 
-        # STEP 4: EC check (p.36)
+        # 3. EC check
         ec = get_ec()
-        if ec < EC_MIN or ec > EC_MAX:
-            print("EC out of range! Calling conductivity_homeostasis()")
+        if ec != -999 and (ec < EC_MIN or ec > EC_MAX):
+            print("EC out of range!")
             conductivity_homeostasis()
         else:
-            print("EC is within range (1.0 - 2.0 mS/cm)")
+            print("EC within range (1.0 - 2.0 mS/cm)")
 
-        # STEP 5: Turbidity check (p.36)
+        # 4. Turbidity check
         turbidity = get_turbidity()
-        if turbidity > TURBIDITY_MAX:
-            print("Turbidity too high! Calling turbidity_homeostasis()")
+        if turbidity != -999 and turbidity > TURBIDITY_MAX:
+            print("Turbidity too high!")
             turbidity_homeostasis()
         else:
-            print("Turbidity is OK (< 30 NTU)")
+            print("Turbidity OK (< 30 NTU)")
             set_output(ORANGE_LIGHT_PIN, 0)
 
-        # STEP 6: Water temperature check (p.37) - now from SHT31
+        # 5. Water temperature check
         temp = get_water_temp()
         if temp != -999 and temp > WATER_TEMP_MAX:
-            print("Water too hot! Calling watertemp_homeostasis()")
+            print("Water too hot!")
             watertemp_homeostasis()
         else:
-            print("Water temperature OK or fan already handled")
+            print("Water temperature OK")
             if temp != -999 and temp < WATER_TEMP_MIN:
                 set_output(FAN_PIN, 0)
 
-        # STEP 7: Flow check (p.37) - now from pulse-counting flow sensor on IO2
+        # 6. Flow check
         flow = get_flow()
         if flow == 0:
-            print("No flow detected! Calling flow_homeostasis()")
+            print("No flow detected!")
             flow_homeostasis()
         else:
-            print("Water flow is OK (", flow, "pulses)")
+            print("Water flow OK (", flow, "pulses)")
             set_output(RED_LIGHT_PIN, 0)
 
-        # STEP 8: Continue monitoring (p.36)
-        print("\n--- Cycle complete. Waiting before next check ---")
+        print("\n--- Cycle complete. Waiting 10 seconds ---")
         time.sleep(10)
 
     print("System stopped. Goodbye!")
 
 
-
+=========================================
 
 main()
