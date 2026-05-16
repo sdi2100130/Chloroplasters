@@ -8,12 +8,13 @@ from machine import Pin, I2C
 import time
 
 
+# ============================================
 # PIN SETUP - XRP Controller
+# ============================================
 
 # --- I2C bus configuration ---
-# Both ADS1015 and SHT31 share the same I2C bus.
-# We use I2C bus 0 with SDA=IO4, SCL=IO5 (Qwiic 0 connector).
-# The SHT31 can be daisy-chained on Qwiic 1 (IO38/IO39 = I2C bus 1).
+# Both ADS1015 and SHT31 share the same I2C bus (Qwiic 0).
+# Daisy-chain SHT31 from ADS1015's second Qwiic connector.
 I2C_SDA_PIN = 4    # IO4 -> Qwiic 0 SDA
 I2C_SCL_PIN = 5    # IO5 -> Qwiic 0 SCL
 
@@ -21,32 +22,42 @@ I2C_SCL_PIN = 5    # IO5 -> Qwiic 0 SCL
 ADS1015_ADDR = 0x48   # Default address of SparkFun ADS1015
 SHT31_ADDR   = 0x44   # Default address of SHT31
 
+
 # --- Analog sensor channels on ADS1015 ---
 # These are NOT XRP pins - they're channel numbers on the ADS1015 chip.
-SOIL_MOISTURE_CHANNEL = 0    # ADS1015 A0
-PH_CHANNEL            = 1    # ADS1015 A1
-EC_CHANNEL            = 2    # ADS1015 A2
-TURBIDITY_CHANNEL     = 3    # ADS1015 A3 (via voltage divider 5V->3.3V!)
+# Note: No soil moisture sensor - Tower Garden is hydroponic.
+PH_CHANNEL        = 0    # ADS1015 A0 -> Generic BNC pH sensor
+EC_CHANNEL        = 1    # ADS1015 A1 -> DFRobot TDS Sensor SEN0244
+TURBIDITY_CHANNEL = 2    # ADS1015 A2 -> DFRobot Turbidity SEN0189 (via voltage divider 5V->3.3V!)
+# Channel A3 reserved for future expansion
+
 
 # --- Digital sensors ---
-FLOW_SENSOR_PIN = 2    # IO2 -> Flow sensor pulse output (yellow wire)
-                       #         VCC=5V, GND=GND
+FLOW_SENSOR_PIN     = 2    # IO2  -> YF-S201 Flow sensor (yellow wire, VCC=5V)
+WATER_TEMP_PIN      = 20   # IO20 -> DS18B20 waterproof temperature sensor (1-Wire) ΘΕΡΜΟΚΡΑΣΙΑΣ!!!! 
+                           #         VCC=3.3V, GND=GND, needs 4.7kΩ pull-up resistor!
 
-# --- Outputs (pumps + fan, all via relay modules) ---
-WATER_PUMP_PIN       = 12   # IO12 -> Relay (main irrigation pump)
-PH_PUMP_ACID_PIN     = 15   # IO15 -> Relay (citric acid pump)
-PH_PUMP_BASE_PIN     = 16   # IO16 -> Relay (potassium bicarbonate pump)
-NUTRIENT_PUMP_PIN    = 17   # IO17 -> Relay (nutrient pump)
-FRESH_WATER_PUMP_PIN = 18   # IO18 -> Relay (fresh water pump)
-FAN_PIN              = 19   # IO19 -> Relay/MOSFET (cooling fan)
 
-# --- Outputs (LEDs with 220Ω current-limiting resistors) ---
-RED_LIGHT_PIN    = 22   # IO22 -> Red LED (tank empty / pump failure)
+# --- Outputs: SERVOS for chemical dosing (syringe pump system) ---
+# Each servo pushes a 20mL syringe to dispense ~1mL doses.
+PH_ACID_SERVO_PIN     = 6    # IO6  (Servo 1) -> Servo for citric acid syringe (pH↓)
+PH_BASE_SERVO_PIN     = 7    # IO7  (Servo 3) -> Servo for potassium bicarbonate syringe (pH↑)
+NUTRIENT_SERVO_PIN    = 27   # IO27 (Servo 4) -> Servo for nutrient solution syringe (EC↑)
+
+
+# --- Outputs: PUMPS & FAN (via relay modules - NEVER direct!) ---
+WATER_PUMP_PIN       = 12   # IO12 -> Relay 1 (main irrigation pump)
+FRESH_WATER_PUMP_PIN = 18   # IO18 -> Relay 2 (fresh water pump for dilution)
+FAN_PIN              = 19   # IO19 -> Relay 3 (cooling fan)
+
+
+# --- Outputs: LEDs (with 220Ω current-limiting resistors) ---
+RED_LIGHT_PIN    = 22   # IO22 -> Red LED (tank empty / pump failure / syringes empty)
 ORANGE_LIGHT_PIN = 23   # IO23 -> Orange LED (water needs replacing)
 
-# --- Stop button (built-in USER button on XRP) ---
-STOP_BUTTON_PIN = 36    # IO36 -> Built-in USER button
 
+# --- Stop button (built-in USER button on XRP) ---
+STOP_BUTTON_PIN = 36    # IO36 -> Built-in USER button on XRP
 
 # =========================================================
 # THRESHOLD VALUES (from project flowcharts)
