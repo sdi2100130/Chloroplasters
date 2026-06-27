@@ -1,10 +1,9 @@
 from machine import I2C, Pin
 import time
 
-
-# Qwiic / ADS1015 setup
-I2C_SDA_PIN = 14
-I2C_SCL_PIN = 15
+# Qwiic / ADS1015 setup - ΔΙΟΡΘΩΜΕΝΑ PINS ΓΙΑ ΤΟ XRP
+I2C_SDA_PIN = 4
+I2C_SCL_PIN = 5
 ADS1015_ADDR = 0x48
 PH_CHANNEL = 0   # ADS1015 A0 -> analog output from pH interface board
 
@@ -14,21 +13,18 @@ ADS1015_REG_CONFIG = 0x01
 ADS1015_CONFIG_BASE = 0x8383
 ADS1015_MUX = {0: 0x4000, 1: 0x5000, 2: 0x6000, 3: 0x7000}
 
-# Generic BNC pH interface calibration.
-# Put the probe in pH 7.00 buffer and adjust NEUTRAL_VOLTAGE until pH reads 7.00.
-# Then use pH 4.00 or pH 10.00 buffer to adjust VOLTS_PER_PH if needed.
+# Calibration settings
 NEUTRAL_PH = 7.0
-NEUTRAL_VOLTAGE = 2.03
-VOLTS_PER_PH = 0.18
+NEUTRAL_VOLTAGE = 1.1
+VOLTS_PER_PH = 0.12
 
-# Reading settings
 SAMPLES = 20
 SAMPLE_DELAY = 0.02
 INTERVAL = 1.0
 
-
 try:
-    i2c = I2C(1, scl=Pin(I2C_SCL_PIN), sda=Pin(I2C_SDA_PIN), freq=100000)
+    # ΔΙΟΡΘΩΜΕΝΟ: Bus 0 αντί για 1
+    i2c = I2C(0, scl=Pin(I2C_SCL_PIN), sda=Pin(I2C_SDA_PIN), freq=100000)
 except Exception as e:
     print("ERROR: Failed to initialize I2C bus: " + str(e))
     raise
@@ -39,7 +35,7 @@ def read_ads1015_channel(channel):
     config = ADS1015_CONFIG_BASE | ADS1015_MUX[channel]
     config_bytes = bytes([ADS1015_REG_CONFIG, (config >> 8) & 0xFF, config & 0xFF])
     i2c.writeto(ADS1015_ADDR, config_bytes)
-    time.sleep(0.005)
+    time.sleep(0.05)
 
     i2c.writeto(ADS1015_ADDR, bytes([ADS1015_REG_CONVERSION]))
     data = i2c.readfrom(ADS1015_ADDR, 2)
@@ -63,7 +59,7 @@ def read_average_voltage():
 
 def voltage_to_ph(voltage):
     """Convert voltage to pH using a generic linear calibration."""
-    return NEUTRAL_PH + ((NEUTRAL_VOLTAGE - voltage) / VOLTS_PER_PH)
+    return NEUTRAL_PH + ((voltage - NEUTRAL_VOLTAGE) / VOLTS_PER_PH)
 
 
 print("=" * 50)
