@@ -23,7 +23,7 @@ TURBIDITY_CHANNEL     = 2    # A2 -> Turbidity
 
 # --- Digital sensors (Ψηφιακοί Αισθητήρες) ---
 FLOW_SENSOR_PIN = 2    # IO2 -> Flow sensor 
-WATER_TEMP_PIN  = 20   # IO20 -> DS18B20 αδιάβροχος αισθητήρας (Με 4.7kΩ αντίσταση!)
+WATER_TEMP_PIN  = 16   # IO16 -> DS18B20 αδιάβροχος αισθητήρας (Με 4.7kΩ αντίσταση!)
 
 # --- Outputs: SERVOS for Syringe Pumps (Σερβοκινητήρες Σύριγγας) ---
 PH_ACID_SERVO_PIN  = 6    # IO6  (Servo 1) -> Κιτρικό Οξύ (pH↓)
