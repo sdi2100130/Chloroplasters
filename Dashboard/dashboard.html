@@ -1,0 +1,535 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chloroplasters — Garden Log</title>
+<style>
+  :root{
+    --bg:#0E1A14; --surface:#16241C; --surface2:#1E3227; --border:#294C39;
+    --green:#3DDC84; --magenta:#E85D9E; --cyan:#5AD1E0; --amber:#F5B94A; --red:#FF6B6B;
+    --blue:#9EC9FF; --violet:#C9A6FF;
+    --text:#EAF2EC; --muted:#8CA89A;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,"Roboto Mono",monospace;
+    --sans:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{
+    background:
+      radial-gradient(1200px 500px at 80% -10%, rgba(232,93,158,.10), transparent 60%),
+      radial-gradient(900px 500px at -10% 0%, rgba(90,209,224,.08), transparent 55%),
+      var(--bg);
+    color:var(--text); font-family:var(--sans);
+    -webkit-font-smoothing:antialiased; padding:22px; line-height:1.45;
+  }
+  .wrap{max-width:1180px;margin:0 auto}
+
+  /* ---- header ---- */
+  header{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-end;justify-content:space-between;margin-bottom:20px}
+  .brand{display:flex;align-items:center;gap:12px}
+  .leaf{width:40px;height:40px;flex:0 0 auto}
+  h1{font-size:22px;margin:0;letter-spacing:-.4px;font-weight:800}
+  .sub{color:var(--muted);font-size:12.5px;margin-top:2px;letter-spacing:.2px}
+  .controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  button{
+    font-family:var(--sans);font-size:13px;font-weight:600;color:var(--text);
+    background:var(--surface2);border:1px solid var(--border);border-radius:10px;
+    padding:9px 13px;cursor:pointer;transition:border-color .15s,background .15s,transform .05s;
+  }
+  button:hover{border-color:var(--green)}
+  button:active{transform:translateY(1px)}
+  button:focus-visible{outline:2px solid var(--green);outline-offset:2px}
+  button.primary{background:var(--green);color:#06170D;border-color:var(--green)}
+  button.live.on{background:var(--magenta);border-color:var(--magenta);color:#20060F}
+  .src{font-family:var(--mono);font-size:11.5px;color:var(--muted);display:flex;align-items:center;gap:6px}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--muted);display:inline-block}
+  .dot.livepulse{background:var(--magenta);box-shadow:0 0 0 0 rgba(232,93,158,.6);animation:pulse 1.6s infinite}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(232,93,158,.55)}70%{box-shadow:0 0 0 7px rgba(232,93,158,0)}100%{box-shadow:0 0 0 0 rgba(232,93,158,0)}}
+
+  /* ---- sensor cards ---- */
+  .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(158px,1fr));gap:12px;margin-bottom:18px}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:13px 14px 10px;position:relative;overflow:hidden}
+  .card .band{position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--muted)}
+  .card.ok .band{background:var(--green)} .card.warn .band{background:var(--amber)} .card.bad .band{background:var(--red)} .card.info .band{background:var(--cyan)}
+  .card .lbl{font-size:11.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.7px;font-weight:700}
+  .card .val{font-family:var(--mono);font-size:27px;font-weight:600;margin-top:4px;line-height:1}
+  .card .val small{font-size:12px;color:var(--muted);font-weight:500;margin-left:3px}
+  .card .rng{font-size:11px;color:var(--muted);margin-top:5px;font-family:var(--mono)}
+  .card .status{font-size:11px;font-weight:700;margin-top:1px}
+  .card.ok .status{color:var(--green)} .card.warn .status{color:var(--amber)} .card.bad .status{color:var(--red)} .card.info .status{color:var(--cyan)}
+  .spark{margin-top:8px;height:26px;width:100%;display:block}
+
+  /* ---- main grid ---- */
+  .main{display:grid;grid-template-columns:1.55fr 1fr;gap:16px;align-items:start}
+  .panel{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:16px}
+  .panel h2{font-size:13px;margin:0 0 12px;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);font-weight:700}
+  .chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px}
+  .chip{font-size:12px;padding:5px 10px;border-radius:20px;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer}
+  .chip.active{color:var(--text);border-color:currentColor}
+  .chartbox{position:relative}
+  #chart{width:100%;height:260px;display:block}
+  .tip{position:absolute;pointer-events:none;background:#0a130e;border:1px solid var(--border);border-radius:8px;padding:6px 9px;font-family:var(--mono);font-size:11.5px;color:var(--text);opacity:0;transform:translate(-50%,-120%);white-space:nowrap;transition:opacity .1s}
+  .tip b{color:var(--magenta)}
+
+  /* ---- event log ---- */
+  .logfilter{display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap}
+  .events{max-height:430px;overflow:auto;margin:-4px -6px 0;padding:0 6px}
+  .ev{display:grid;grid-template-columns:52px 14px 1fr;gap:9px;align-items:baseline;padding:7px 0;border-bottom:1px solid rgba(41,76,57,.5)}
+  .ev:last-child{border-bottom:0}
+  .ev .t{font-family:var(--mono);font-size:11px;color:var(--muted)}
+  .ev .pip{width:9px;height:9px;border-radius:50%;margin-top:4px;background:var(--muted)}
+  .ev .body .name{font-weight:600;font-size:13.5px}
+  .ev .body .det{font-size:12px;color:var(--muted);font-family:var(--mono)}
+  .ev .qty{color:var(--green);font-weight:600}
+
+  /* ---- footer stats ---- */
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px;margin-top:16px}
+  .stat{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 14px}
+  .stat .n{font-family:var(--mono);font-size:22px;font-weight:600}
+  .stat .k{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-top:2px}
+
+  /* ---- empty state ---- */
+  .empty{border:1.5px dashed var(--border);border-radius:16px;padding:40px 24px;text-align:center;color:var(--muted)}
+  .empty h3{color:var(--text);margin:0 0 6px;font-size:16px}
+  .empty p{margin:4px 0;font-size:13.5px}
+  .empty .row{display:flex;gap:10px;justify-content:center;margin-top:16px;flex-wrap:wrap}
+  .drop{outline:2px dashed var(--green);outline-offset:-8px}
+
+  @media(max-width:820px){.main{grid-template-columns:1fr}}
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <svg class="leaf" viewBox="0 0 40 40" fill="none" aria-hidden="true">
+        <path d="M20 36C8 30 6 16 10 6c12 0 22 6 22 18 0 6-4 10-12 12z" fill="#16241C" stroke="var(--green)" stroke-width="1.6"/>
+        <path d="M20 34c0-9 1-16 4-22" stroke="var(--green)" stroke-width="1.6" stroke-linecap="round"/>
+        <path d="M20 22c-2-2-5-3-8-3M22 28c1-2 4-4 7-4" stroke="var(--green)" stroke-width="1.4" stroke-linecap="round"/>
+      </svg>
+      <div>
+        <h1>Chloroplasters — Tower Garden Log</h1>
+        <div class="sub">Readings · timestamps · actions taken</div>
+      </div>
+    </div>
+    <div class="controls">
+      <div class="src"><span id="srcdot" class="dot"></span><span id="srctxt">no data loaded</span></div>
+      <input id="file" type="file" accept=".csv,text/csv" hidden>
+      <button onclick="document.getElementById('file').click()">Load log file</button>
+      <button id="liveBtn" class="live" onclick="toggleLive()">Connect device (USB)</button>
+      <button onclick="wifiConnect()">Connect over WiFi</button>
+      <button onclick="loadSample()">Try sample data</button>
+    </div>
+  </header>
+
+  <div id="dash" hidden>
+    <div class="cards" id="cards"></div>
+
+    <div class="main">
+      <div class="panel">
+        <h2>Readings over time</h2>
+        <div class="chips" id="metricChips"></div>
+        <div class="chartbox">
+          <svg id="chart" viewBox="0 0 640 260" preserveAspectRatio="none"></svg>
+          <div class="tip" id="tip"></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Actions &amp; events</h2>
+        <div class="logfilter" id="logFilter"></div>
+        <div class="events" id="events"></div>
+      </div>
+    </div>
+
+    <div class="stats" id="stats"></div>
+  </div>
+
+  <div id="emptyState" class="empty">
+    <h3>No data yet</h3>
+    <p>Drop your <span style="font-family:var(--mono);color:var(--green)">garden_log.csv</span> here, or load it from the button above.</p>
+    <p style="font-size:12px">On Chrome or Edge you can also connect the board over USB to watch it live.</p>
+    <div class="row">
+      <button class="primary" onclick="loadSample()">Try sample data</button>
+      <button onclick="document.getElementById('file').click()">Load log file</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ---------- metric config (thresholds come straight from main.py) ----------
+const C={green:"#3DDC84",magenta:"#E85D9E",cyan:"#5AD1E0",amber:"#F5B94A",red:"#FF6B6B",blue:"#9EC9FF",violet:"#C9A6FF",muted:"#8CA89A",border:"#294C39"};
+const METRICS = {
+  pH:        {name:"pH",         unit:"",      color:C.green,   min:5.5, max:6.5, mode:"range"},
+  EC:        {name:"EC",         unit:"mS/cm", color:C.cyan,    min:1.0, max:2.0, mode:"range"},
+  turbidity: {name:"Turbidity",  unit:"NTU",   color:C.amber,   max:30,  mode:"max"},
+  water_temp:{name:"Water temp", unit:"°C",    color:C.magenta, max:30,  mode:"max"},
+  air_temp:  {name:"Air temp",   unit:"°C",    color:C.blue,    mode:"info"},
+  humidity:  {name:"Humidity",   unit:"%",     color:C.violet,  mode:"info"},
+};
+const EVENT_STYLE = {
+  dose_acid:{c:C.green,t:"Dosed citric acid"},
+  dose_base:{c:C.green,t:"Dosed bicarbonate"},
+  dose_nutrient:{c:C.green,t:"Dosed nutrients with two syringes"},
+  dilute:{c:C.cyan,t:"Added fresh water"},
+  water_start:{c:C.cyan,t:"Watering started"},
+  water_done:{c:C.cyan,t:"Watering done"},
+  fan_on:{c:C.amber,t:"Fan on"},
+  fan_off:{c:C.amber,t:"Fan off"},
+  water_cleared:{c:C.green,t:"Water cleared"},
+  dirty_water:{c:C.red,t:"Dirty water"},
+  no_flow:{c:C.red,t:"No flow"},
+  pump_timeout:{c:C.red,t:"Pump timeout"},
+  normal:{c:C.green,t:"Normal state"},
+  safe:{c:C.red,t:"Safe state"},
+};
+
+let DATA = [];            // {iso,uptime,kind,label,value,unit,detail}
+let activeMetric = "pH";
+let logFilter = "all";
+
+// ---------- parsing ----------
+function parseRow(cols){
+  if(cols.length < 4) return null;
+  const [iso,uptime,kind,label,value,unit,detail] = cols;
+  if(kind==="kind") return null;                 // header
+  return {
+    iso: iso||"", uptime: parseInt(uptime)||0, kind, label,
+    value: value===""||value===undefined?null:parseFloat(value),
+    unit: unit||"", detail: detail||""
+  };
+}
+function ingestCSV(text){
+  const rows=[];
+  for(const line of text.split(/\r?\n/)){
+    if(!line.trim()) continue;
+    const r=parseRow(line.split(","));
+    if(r) rows.push(r);
+  }
+  DATA = rows;
+  render();
+}
+
+// ---------- helpers ----------
+function fmtTime(rec){
+  if(rec.iso){ return rec.iso.slice(11,16); }          // HH:MM
+  const s=rec.uptime, m=Math.floor(s/60), ss=s%60;
+  return "T+"+m+":"+String(ss).padStart(2,"0");
+}
+function sensorSeries(label){
+  return DATA.filter(d=>d.kind==="sensor"&&d.label===label&&d.value!=null)
+             .sort((a,b)=>a.uptime-b.uptime);
+}
+function statusFor(m,v){
+  if(v==null) return "info";
+  if(m.mode==="range") return (v>=m.min&&v<=m.max)?"ok":"warn";
+  if(m.mode==="max")   return (v<=m.max)?"ok":"warn";
+  return "info";
+}
+function statusText(m,v,s){
+  if(m.mode==="info") return "reading";
+  if(s==="ok") return "in range";
+  if(m.mode==="range") return v<m.min?"too low":"too high";
+  return "too high";
+}
+
+// ---------- render ----------
+function render(){
+  const has = DATA.length>0;
+  document.getElementById("dash").hidden = !has;
+  document.getElementById("emptyState").hidden = has;
+  if(!has) return;
+  renderCards();
+  renderChips();
+  renderChart();
+  renderFilters();
+  renderEvents();
+  renderStats();
+}
+
+function sparkline(series,color){
+  if(series.length<2) return "";
+  const w=150,h=26,pad=3;
+  const xs=series.map(d=>d.uptime), ys=series.map(d=>d.value);
+  const x0=Math.min(...xs),x1=Math.max(...xs)||1;
+  const y0=Math.min(...ys),y1=Math.max(...ys);
+  const nx=v=>pad+(x1===x0?0:(v-x0)/(x1-x0))*(w-2*pad);
+  const ny=v=>y1===y0?h/2:h-pad-((v-y0)/(y1-y0))*(h-2*pad);
+  const pts=series.map(d=>nx(d.uptime).toFixed(1)+","+ny(d.value).toFixed(1)).join(" ");
+  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+    <polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1.6" stroke-linejoin="round"/>
+  </svg>`;
+}
+
+function renderCards(){
+  const el=document.getElementById("cards"); el.innerHTML="";
+  for(const key of Object.keys(METRICS)){
+    const m=METRICS[key], series=sensorSeries(key);
+    const last=series.length?series[series.length-1]:null;
+    const v=last?last.value:null;
+    const s=statusFor(m,v);
+    const rng = m.mode==="range"?`ok ${m.min}–${m.max}`:(m.mode==="max"?`ok ≤ ${m.max}`:"");
+    el.insertAdjacentHTML("beforeend",`
+      <div class="card ${s}">
+        <span class="band"></span>
+        <div class="lbl">${m.name}</div>
+        <div class="val">${v==null?"—":v}<small>${m.unit}</small></div>
+        <div class="status">${v==null?"no data":statusText(m,v,s)}</div>
+        <div class="rng">${rng}</div>
+        ${sparkline(series,m.color)}
+      </div>`);
+  }
+  // Water delivered (cumulative)
+  const delivered=DATA.filter(d=>d.label==="water_done"&&d.value!=null)
+                      .reduce((a,d)=>a+d.value,0);
+  el.insertAdjacentHTML("beforeend",`
+    <div class="card info">
+      <span class="band"></span>
+      <div class="lbl">Water delivered</div>
+      <div class="val">${delivered.toFixed(1)}<small>L</small></div>
+      <div class="status">total this session</div>
+      <div class="rng">${DATA.filter(d=>d.label==="water_start").length} cycles</div>
+    </div>`);
+}
+
+function renderChips(){
+  const el=document.getElementById("metricChips"); el.innerHTML="";
+  for(const key of Object.keys(METRICS)){
+    if(!sensorSeries(key).length) continue;
+    const m=METRICS[key];
+    const b=document.createElement("button");
+    b.className="chip"+(key===activeMetric?" active":"");
+    b.textContent=m.name; b.style.color=key===activeMetric?m.color:"";
+    b.onclick=()=>{activeMetric=key;renderChips();renderChart();};
+    el.appendChild(b);
+  }
+  if(!sensorSeries(activeMetric).length){
+    const first=Object.keys(METRICS).find(k=>sensorSeries(k).length);
+    if(first){activeMetric=first;renderChips();}
+  }
+}
+
+function renderChart(){
+  const svg=document.getElementById("chart");
+  const W=640,H=260,L=44,R=12,T=14,B=26;
+  const m=METRICS[activeMetric], series=sensorSeries(activeMetric);
+  svg.innerHTML="";
+  if(series.length<2){svg.innerHTML=`<text x="${W/2}" y="${H/2}" fill="#8CA89A" font-size="13" text-anchor="middle">Not enough points yet</text>`;return;}
+  const xs=series.map(d=>d.uptime), ys=series.map(d=>d.value);
+  let y0=Math.min(...ys), y1=Math.max(...ys);
+  // include thresholds in the visible range so the band is meaningful
+  if(m.mode==="range"){y0=Math.min(y0,m.min);y1=Math.max(y1,m.max);}
+  if(m.mode==="max"){y1=Math.max(y1,m.max);}
+  const padY=(y1-y0)*0.12||1; y0-=padY; y1+=padY;
+  const x0=Math.min(...xs), x1=Math.max(...xs);
+  const nx=v=>L+(x1===x0?0:(v-x0)/(x1-x0))*(W-L-R);
+  const ny=v=>T+(1-(v-y0)/(y1-y0))*(H-T-B);
+  let out="";
+  // ok band
+  if(m.mode==="range") out+=`<rect x="${L}" y="${ny(m.max).toFixed(1)}" width="${W-L-R}" height="${(ny(m.min)-ny(m.max)).toFixed(1)}" fill="${m.color}" opacity="0.10"/>`;
+  if(m.mode==="max") out+=`<rect x="${L}" y="${ny(y1).toFixed(1)}" width="${W-L-R}" height="${(ny(m.max)-ny(y1)).toFixed(1)}" fill="${m.color}" opacity="0.10"/>`;
+  // gridlines + y labels
+  for(let i=0;i<=3;i++){
+    const val=y0+(y1-y0)*i/3, yy=ny(val);
+    out+=`<line x1="${L}" y1="${yy.toFixed(1)}" x2="${W-R}" y2="${yy.toFixed(1)}" stroke="#294C39" stroke-width="1" opacity="0.5"/>`;
+    out+=`<text x="${L-6}" y="${(yy+3).toFixed(1)}" fill="#8CA89A" font-size="10" text-anchor="end" font-family="var(--mono)">${val.toFixed(1)}</text>`;
+  }
+  // x labels (start / mid / end)
+  [0,0.5,1].forEach(f=>{
+    const rec=series[Math.round(f*(series.length-1))];
+    out+=`<text x="${nx(rec.uptime).toFixed(1)}" y="${H-8}" fill="#8CA89A" font-size="10" text-anchor="middle" font-family="var(--mono)">${fmtTime(rec)}</text>`;
+  });
+  // line (with grow-light glow)
+  const pts=series.map(d=>nx(d.uptime).toFixed(1)+","+ny(d.value).toFixed(1)).join(" ");
+  out+=`<polyline points="${pts}" fill="none" stroke="${m.color}" stroke-width="3.5" opacity="0.22" stroke-linejoin="round"/>`;
+  out+=`<polyline points="${pts}" fill="none" stroke="${m.color}" stroke-width="1.8" stroke-linejoin="round"/>`;
+  svg.innerHTML=out;
+
+  // hover tooltip
+  const tip=document.getElementById("tip");
+  svg.onmousemove=e=>{
+    const box=svg.getBoundingClientRect();
+    const px=(e.clientX-box.left)/box.width*W;
+    let best=series[0],bd=1e9;
+    for(const d of series){const dx=Math.abs(nx(d.uptime)-px);if(dx<bd){bd=dx;best=d;}}
+    tip.style.opacity=1;
+    tip.style.left=(nx(best.uptime)/W*box.width)+"px";
+    tip.style.top=(ny(best.value)/H*box.height)+"px";
+    tip.innerHTML=`<b>${best.value}</b> ${m.unit} · ${fmtTime(best)}`;
+  };
+  svg.onmouseleave=()=>tip.style.opacity=0;
+}
+
+function renderFilters(){
+  const el=document.getElementById("logFilter"); el.innerHTML="";
+  const opts=[["all","All"],["dose","Doses"],["water","Watering"],["alarm","Alarms"]];
+  for(const [k,label] of opts){
+    const b=document.createElement("button");
+    b.className="chip"+(k===logFilter?" active":"");
+    b.textContent=label; b.onclick=()=>{logFilter=k;renderFilters();renderEvents();};
+    el.appendChild(b);
+  }
+}
+function passFilter(d){
+  if(logFilter==="all") return true;
+  if(logFilter==="dose") return d.label.startsWith("dose")||d.label==="dilute";
+  if(logFilter==="water") return d.label.startsWith("water")||d.kind==="state";
+  if(logFilter==="alarm") return d.kind==="alarm";
+  return true;
+}
+function renderEvents(){
+  const el=document.getElementById("events");
+  const evs=DATA.filter(d=>d.kind!=="sensor"&&passFilter(d)).sort((a,b)=>b.uptime-a.uptime);
+  if(!evs.length){el.innerHTML=`<div style="color:var(--muted);font-size:13px;padding:8px 0">No events for this filter yet.</div>`;return;}
+  el.innerHTML=evs.map(d=>{
+    const st=EVENT_STYLE[d.label]||{c:"var(--muted)",t:d.label};
+    const qty=(d.value!=null&&d.unit)?`<span class="qty" style="color:${st.c}"> ${d.value} ${d.unit}</span>`:"";
+    return `<div class="ev">
+      <span class="t">${fmtTime(d)}</span>
+      <span class="pip" style="background:${st.c}"></span>
+      <span class="body"><span class="name">${st.t}${qty}</span>${d.detail?`<div class="det">${d.detail}</div>`:""}</span>
+    </div>`;
+  }).join("");
+}
+
+function renderStats(){
+  const el=document.getElementById("stats");
+  const doses=DATA.filter(d=>d.label&&(d.label.startsWith("dose")||d.label==="dilute")).length;
+  const water=DATA.filter(d=>d.label==="water_done"&&d.value!=null).reduce((a,d)=>a+d.value,0);
+  const alarms=DATA.filter(d=>d.kind==="alarm").length;
+  const dur=Math.max(0,...DATA.map(d=>d.uptime));
+  const h=Math.floor(dur/3600),mi=Math.floor((dur%3600)/60);
+  const stats=[
+    ["Doses given",doses,"var(--green)"],
+    ["Water delivered",water.toFixed(1)+" L","var(--cyan)"],
+    ["Alarms",alarms,alarms?"var(--red)":"var(--text)"],
+    ["Session length",(h?h+"h ":"")+mi+"m","var(--text)"],
+  ];
+  el.innerHTML=stats.map(([k,n,c])=>`<div class="stat"><div class="n" style="color:${c}">${n}</div><div class="k">${k}</div></div>`).join("");
+}
+
+// ---------- file loading + drag/drop ----------
+document.getElementById("file").addEventListener("change",e=>{
+  const f=e.target.files[0]; if(!f) return;
+  const r=new FileReader();
+  r.onload=()=>{ingestCSV(r.result);setSource("file: "+f.name,"var(--green)");};
+  r.readAsText(f);
+});
+["dragover","dragenter"].forEach(ev=>document.body.addEventListener(ev,e=>{e.preventDefault();document.body.classList.add("drop");}));
+["dragleave","drop"].forEach(ev=>document.body.addEventListener(ev,e=>{e.preventDefault();document.body.classList.remove("drop");}));
+document.body.addEventListener("drop",e=>{
+  const f=e.dataTransfer.files[0]; if(!f) return;
+  const r=new FileReader();
+  r.onload=()=>{ingestCSV(r.result);setSource("file: "+f.name,"var(--green)");};
+  r.readAsText(f);
+});
+function setSource(txt,color){
+  document.getElementById("srctxt").textContent=txt;
+  const d=document.getElementById("srcdot"); d.style.background=color||"var(--muted)"; d.classList.remove("livepulse");
+}
+
+// ---------- live USB (Web Serial) ----------
+let port,reader,liveOn=false,serialBuf="";
+async function toggleLive(){
+  const btn=document.getElementById("liveBtn");
+  if(liveOn){ liveOn=false; try{await reader.cancel();}catch(e){} try{await port.close();}catch(e){}
+    btn.classList.remove("on"); btn.textContent="Connect device (USB)"; setSource("live paused","var(--muted)"); return; }
+  if(!("serial" in navigator)){ alert("Live USB needs Chrome or Edge on desktop. You can still load the CSV file."); return; }
+  try{
+    port=await navigator.serial.requestPort();
+    await port.open({baudRate:115200});
+    liveOn=true; DATA=[]; serialBuf="";
+    btn.classList.add("on"); btn.textContent="Disconnect";
+    document.getElementById("srctxt").textContent="live: reading device…";
+    const d=document.getElementById("srcdot"); d.classList.add("livepulse");
+    readLoop();
+  }catch(e){ /* user cancelled */ }
+}
+async function readLoop(){
+  const dec=new TextDecoder();
+  reader=port.readable.getReader();
+  try{
+    while(liveOn){
+      const {value,done}=await reader.read();
+      if(done) break;
+      serialBuf+=dec.decode(value,{stream:true});
+      let nl;
+      while((nl=serialBuf.indexOf("\n"))>=0){
+        const line=serialBuf.slice(0,nl).trim(); serialBuf=serialBuf.slice(nl+1);
+        if(line.startsWith("LOG,")){
+          const r=parseRow(line.slice(4).split(","));
+          if(r){DATA.push(r);}
+        }
+      }
+      render();
+    }
+  }catch(e){}
+  finally{ try{reader.releaseLock();}catch(e){} }
+}
+
+// ---------- live WiFi (board serves /data.json) ----------
+let wifiTimer=null, wifiBase="";
+function ingestRecords(arr){
+  DATA=arr.map(r=>({iso:r.iso||"",uptime:parseInt(r.uptime)||0,kind:r.kind,label:r.label,
+    value:(r.value===null||r.value===undefined||r.value==="")?null:parseFloat(r.value),
+    unit:r.unit||"",detail:r.detail||""}));
+  render();
+}
+async function wifiPoll(){
+  try{
+    const res=await fetch(wifiBase+"/data.json",{cache:"no-store"});
+    const j=await res.json();
+    if(j&&j.records){
+      ingestRecords(j.records);
+      const who=wifiBase?wifiBase.replace("http://",""):"board";
+      setSource(who+" · live over WiFi","var(--green)");
+      document.getElementById("srcdot").classList.add("livepulse");
+    }
+  }catch(e){ setSource("WiFi: no response — check IP and same network","var(--amber)"); }
+}
+function startWifi(base){
+  wifiBase=base;
+  if(wifiTimer) clearInterval(wifiTimer);
+  wifiPoll();
+  wifiTimer=setInterval(wifiPoll,4000);
+}
+function wifiConnect(){
+  const ip=prompt("Board IP address (printed in the board's serial output at startup):","192.168.1.50");
+  if(!ip) return;
+  startWifi("http://"+ip.trim());
+}
+// If the board itself served this page, poll it automatically (same origin).
+if((location.protocol==="http:"||location.protocol==="https:")&&location.hostname){
+  startWifi("");
+}
+
+// ---------- built-in sample (no file needed) ----------
+function loadSample(){
+  const rows=[["","0","state","normal","","",""]];
+  let ph=6.1,ec=1.6,turb=12,wt=27,at=24,hum=55,lastPh=-9999,lastEc=-9999;
+  const R=(a,b)=>a+Math.random()*(b-a);
+  for(let step=0;step<130;step++){
+    const t=step*60;
+    ph+=R(-.03,.06); ec+=R(-.05,.02); turb=Math.max(2,turb+R(-2,3));
+    wt+=R(-.2,.35); at+=R(-.3,.4); hum=Math.max(30,Math.min(85,hum+R(-1.5,1.5)));
+    rows.push(["",t,"sensor","pH",ph.toFixed(2),"",""]);
+    rows.push(["",t,"sensor","EC",ec.toFixed(2),"mS/cm",""]);
+    rows.push(["",t,"sensor","turbidity",turb.toFixed(1),"NTU",""]);
+    rows.push(["",t,"sensor","water_temp",wt.toFixed(1),"°C",""]);
+    if(step%3===0){rows.push(["",t,"sensor","air_temp",at.toFixed(1),"°C",""]);
+                   rows.push(["",t,"sensor","humidity",hum.toFixed(1),"%",""]);}
+    if(ph>6.5&&t-lastPh>300){rows.push(["",t+5,"action","dose_acid","1","mL","pH high "+ph.toFixed(2)]);lastPh=t;ph-=.5;}
+    if(ec<1.0&&t-lastEc>300){rows.push(["",t+5,"action","dose_nutrient","1","mL","EC low "+ec.toFixed(2)]);lastEc=t;ec+=.4;}
+    if(wt>30&&step%20===5){rows.push(["",t+2,"action","fan_on",wt.toFixed(1),"°C water",""]);}
+    if(step===30||step===75||step===120){
+      rows.push(["",t,"action","water_start","","","target 2.0 L"]);
+      rows.push(["",t+90,"action","water_done",R(1.9,2.05).toFixed(2),"L","delivered"]);
+    }
+  }
+  rows.push(["",50*60,"alarm","dirty_water","","","41.2 NTU"]);
+  rows.push(["",56*60,"action","water_cleared","","","turbidity back to normal"]);
+  rows.push(["",88*60,"alarm","no_flow","","","no pulses for 60 s"]);
+  rows.push(["",88*60+1,"state","safe","","",""]);
+  rows.push(["",95*60,"state","normal","","",""]);
+  DATA=rows.map(r=>parseRow(r.map(String))).filter(Boolean).sort((a,b)=>a.uptime-b.uptime);
+  setSource("sample data (demo)","var(--amber)");
+  render();
+}
+</script>

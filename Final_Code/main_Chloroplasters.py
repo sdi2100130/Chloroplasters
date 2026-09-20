@@ -7,6 +7,12 @@ from machine import Pin, PWM
 import time
 from sensors import read_all
 from homeostasis import homeostasis, record_flow_pulse, reset_state, set_last_water_time
+from garden_logger import Logger
+
+try:
+    import garden_wifi
+except ImportError:
+    garden_wifi = None
 
 # =========================================================
 # 1. PIN ASSIGNMENTS
@@ -30,8 +36,8 @@ WATER_TEMP_PIN  = 16    # DS18B20 waterproof (4.7kΩ pull-up!)
 # --- Servo actuators (PWM) ---
 PH_ACID_SERVO_PIN  = 6  # Citric acid (pH down)
 PH_BASE_SERVO_PIN  = 7  # Potassium bicarbonate (pH up)
-NUTRIENT_SERVO_PIN = 8  # Nutrient straw lift/lower servo (EC up)
-NUTRIENT_2_SERVO_PIN = 9  # Optional/unused second nutrient servo
+NUTRIENT_SERVO_PIN = 8  # First nutrient syringe motor/servo (EC up)
+NUTRIENT_2_SERVO_PIN = 9  # Second nutrient syringe motor/servo (EC up)
 
 # --- Relay outputs ---
 WATER_PUMP_PIN       = 12  # Main irrigation pump
@@ -83,12 +89,23 @@ PUMP_TIMEOUT_SECONDS = 300  # TRIAL-AND-ERROR: max pump runtime; set safely abov
 NO_FLOW_TIMEOUT      = 60   # TRIAL-AND-ERROR: no-flow alarm delay; tune for startup lag and sensor reliability.
 
 # --- Dosing ---
-SERVO_1ML_ANGLE   = 20      # TRIAL-AND-ERROR: acid/base syringe angle for one dose; calibrate with real mL output.
+PH_SOLUTION_ANGLE_STEP = 45  # TRIAL-AND-ERROR: acid/base servo step size for clearer dosing movement.
+PH_SOLUTION_MAX_ANGLE = 90   # TRIAL-AND-ERROR: acid/base servo must not move past this angle.
+SERVO_1ML_ANGLE = PH_SOLUTION_ANGLE_STEP  # Kept for compatibility with older syringe test code.
+NUTRIENT_SYRINGE_ANGLE_STEP = 45  # TRIAL-AND-ERROR: nutrient syringe motor/servo step size.
+NUTRIENT_SYRINGE_MAX_ANGLE = 90  # TRIAL-AND-ERROR: nutrient syringe motor/servo max dosing angle.
+NUTRIENT_SYRINGE_HOLD_SECONDS = 1  # TRIAL-AND-ERROR: time nutrient syringes hold at max angle.
 NUTRIENT_STRAW_REST_ANGLE = 0  # TRIAL-AND-ERROR: angle where nutrient straw is fully raised/resting.
 NUTRIENT_STRAW_FEED_ANGLE = 90  # TRIAL-AND-ERROR: angle where nutrient straw feeds correctly.
 NUTRIENT_STRAW_FEED_SECONDS = 5  # TRIAL-AND-ERROR: time straw stays in feed position.
 DOSE_MIXING_WAIT  = 300     # TRIAL-AND-ERROR: wait time for acid/base/nutrients to mix before dosing again.
 MAX_DOSES_PER_CYCLE = 4     # TRIAL-AND-ERROR: safety cap if readings do not converge after repeated dosing.
+
+# --- Dashboard logging ---
+LOG_SENSOR_PERIOD_SECONDS = 5  # TRIAL-AND-ERROR: lower for live demos, higher to reduce flash writes.
+WIFI_DASHBOARD_ENABLED = False
+WIFI_SSID = "YOUR_WIFI_NAME"
+WIFI_PASSWORD = "YOUR_WIFI_PASSWORD"
 
 # =========================================================
 # 3. HARDWARE INITIALIZATION
@@ -109,6 +126,14 @@ rgb_red_pwm.freq(1000)
 rgb_green_pwm.freq(1000)
 rgb_blue_pwm.freq(1000)
 
+logger = Logger(sensor_period_s=LOG_SENSOR_PERIOD_SECONDS, echo=True)
+wifi_server = None
+
+if WIFI_DASHBOARD_ENABLED and garden_wifi is not None:
+    ip = garden_wifi.connect(WIFI_SSID, WIFI_PASSWORD)
+    if ip is not None:
+        wifi_server = garden_wifi.Server(logger)
+
 # =========================================================
 # 7. ACTUATOR FUNCTIONS
 # =========================================================
@@ -127,7 +152,10 @@ def set_servo_angle(pin_num, angle):
 def push_syringe(servo_pin):
     """Move an acid/base syringe servo to dose, then return to rest."""
     print("Dosing syringe on pin", servo_pin)
-    set_servo_angle(servo_pin, SERVO_1ML_ANGLE)
+    angle = 0
+    while angle < PH_SOLUTION_MAX_ANGLE:
+        angle = min(angle + PH_SOLUTION_ANGLE_STEP, PH_SOLUTION_MAX_ANGLE)
+        set_servo_angle(servo_pin, angle)
     time.sleep(1)
     set_servo_angle(servo_pin, 0)
 
@@ -139,8 +167,8 @@ def feed_nutrients_with_straw(servo_pin):
     set_servo_angle(servo_pin, NUTRIENT_STRAW_REST_ANGLE)
 
 def push_syringes_parallel(servo_pins):
-    """Dispense from multiple syringes for the same amount of time."""
-    print("Dosing syringes on pins", servo_pins)
+    """Push multiple nutrient syringes together, then return them to rest."""
+    print("Dosing nutrient syringes on pins", servo_pins)
     pwms = []
     try:
         for servo_pin in servo_pins:
@@ -150,12 +178,19 @@ def push_syringes_parallel(servo_pins):
 
         min_duty = 1000
         max_duty = 9000
-        dose_duty = min_duty + int((SERVO_1ML_ANGLE / 180) * (max_duty - min_duty))
         rest_duty = min_duty
 
-        for pwm in pwms:
-            pwm.duty_u16(dose_duty)
-        time.sleep(1)
+        angle = 0
+        while angle < NUTRIENT_SYRINGE_MAX_ANGLE:
+            angle = min(angle + NUTRIENT_SYRINGE_ANGLE_STEP, NUTRIENT_SYRINGE_MAX_ANGLE)
+            dose_duty = min_duty + int((angle / 180) * (max_duty - min_duty))
+            print("Nutrient syringes angle:", angle)
+            for pwm in pwms:
+                pwm.duty_u16(dose_duty)
+            time.sleep(0.5)
+
+        time.sleep(NUTRIENT_SYRINGE_HOLD_SECONDS)
+
         for pwm in pwms:
             pwm.duty_u16(rest_duty)
         time.sleep(0.5)
@@ -222,6 +257,22 @@ def show_dirty_water_state():
 def show_no_flow_state():
     set_rgb(0, 0, 255)
 
+def log_sensor_readings(readings):
+    """Send the latest readings to CSV/USB/WiFi for the dashboard."""
+    logger.sensor("pH", readings["ph"])
+    logger.sensor("EC", readings["ec"], "mS/cm")
+    logger.sensor("turbidity", readings["turbidity"], "NTU")
+    logger.sensor("water_temp", readings["water_temp"], "C")
+    logger.sensor("air_temp", readings["air_temp"], "C")
+    logger.sensor("humidity", readings["air_humidity"], "%")
+
+def dashboard_wait(seconds):
+    """Wait while still serving WiFi dashboard requests if WiFi is enabled."""
+    if wifi_server is not None:
+        wifi_server.poll(seconds)
+    else:
+        time.sleep(seconds)
+
 def homeostasis_controls():
     return {
         "set_output": set_output,
@@ -233,6 +284,7 @@ def homeostasis_controls():
         "show_dirty_water_state": show_dirty_water_state,
         "show_no_flow_state": show_no_flow_state,
         "safe_state": safe_state,
+        "logger": logger,
     }
 
 def homeostasis_config():
@@ -256,6 +308,9 @@ def homeostasis_config():
         "PH_BASE_SERVO_PIN": PH_BASE_SERVO_PIN,
         "NUTRIENT_SERVO_PIN": NUTRIENT_SERVO_PIN,
         "NUTRIENT_2_SERVO_PIN": NUTRIENT_2_SERVO_PIN,
+        "NUTRIENT_SYRINGE_ANGLE_STEP": NUTRIENT_SYRINGE_ANGLE_STEP,
+        "NUTRIENT_SYRINGE_MAX_ANGLE": NUTRIENT_SYRINGE_MAX_ANGLE,
+        "NUTRIENT_SYRINGE_HOLD_SECONDS": NUTRIENT_SYRINGE_HOLD_SECONDS,
         "NUTRIENT_STRAW_REST_ANGLE": NUTRIENT_STRAW_REST_ANGLE,
         "NUTRIENT_STRAW_FEED_ANGLE": NUTRIENT_STRAW_FEED_ANGLE,
         "NUTRIENT_STRAW_FEED_SECONDS": NUTRIENT_STRAW_FEED_SECONDS,
@@ -272,6 +327,7 @@ def normal_state():
     """Normal operation: run homeostasis loop until button pressed."""
     all_outputs_off()
     show_normal_state()
+    logger.state("normal", "homeostasis active")
     print("=" * 40)
     print("NORMAL STATE — homeostasis active")
     print("=" * 40)
@@ -281,20 +337,24 @@ def normal_state():
             wait_for_button_release()
             return safe_state
 
+        readings = read_all()
+        log_sensor_readings(readings)
+
         next_state = homeostasis(
-            read_all(),
+            readings,
             homeostasis_controls(),
             homeostasis_config(),
         )
         if next_state is not None:
             return next_state
 
-        time.sleep(2)
+        dashboard_wait(2)
 
 def safe_state():
     """Safe mode: all outputs off, red LED on, waiting for resume."""
     all_outputs_off()
     show_safe_state()
+    logger.state("safe", "system paused")
     print("=" * 40)
     print("SAFE STATE — system paused")
     print("Press the button again to resume.")
@@ -304,7 +364,7 @@ def safe_state():
         if is_button_pressed():
             wait_for_button_release()
             return normal_state
-        time.sleep(0.1)
+        dashboard_wait(0.1)
 
 # =========================================================
 # 11. MAIN ENTRY POINT

@@ -14,18 +14,33 @@ dirty_water_alarm    = False
 combined_warning_blue = True
 current_irrigation_interval = 1800
 current_water_target_pulses = 0
+fan_is_on = False
 
 last_ph_dose_time = 0
 last_ec_dose_time = 0
 
 
+def log_action(controls, label, detail="", value: object = "", unit=""):
+    """Log an action; the logger accepts both numeric and text values."""
+    logger = controls.get("logger")
+    if logger is not None:
+        logger.action(label, detail, value, unit)
+
+
+def log_alarm(controls, label, detail=""):
+    logger = controls.get("logger")
+    if logger is not None:
+        logger.alarm(label, detail)
+
+
 def reset_state():
     """Reset watering and warning state after entering safe/off mode."""
-    global is_watering, no_flow_alarm, dirty_water_alarm, combined_warning_blue
+    global is_watering, no_flow_alarm, dirty_water_alarm, combined_warning_blue, fan_is_on
     is_watering = False
     no_flow_alarm = False
     dirty_water_alarm = False
     combined_warning_blue = True
+    fan_is_on = False
 
 
 def set_last_water_time(value):
@@ -73,10 +88,12 @@ def ph_homeostasis(readings, controls, config):
     if ph > config["PH_MAX"]:
         print(">>> pH HIGH - dosing citric acid")
         controls["push_syringe"](config["PH_ACID_SERVO_PIN"])
+        log_action(controls, "dose_acid", "pH high " + str(round(ph, 2)), 1, "dose")
         last_ph_dose_time = time.time()
     elif ph < config["PH_MIN"]:
         print(">>> pH LOW - dosing potassium bicarbonate")
         controls["push_syringe"](config["PH_BASE_SERVO_PIN"])
+        log_action(controls, "dose_base", "pH low " + str(round(ph, 2)), 1, "dose")
         last_ph_dose_time = time.time()
 
 
@@ -90,18 +107,23 @@ def conductivity_homeostasis(readings, controls, config):
     if time.time() - last_ec_dose_time < config["DOSE_MIXING_WAIT"]:
         return
     if ec < config["EC_MIN"]:
-        print(">>> EC LOW - lowering nutrient straw")
-        controls["feed_nutrients_with_straw"](config["NUTRIENT_SERVO_PIN"])
+        print(">>> EC LOW - dosing nutrients with two syringes")
+        controls["push_syringes_parallel"](
+            (config["NUTRIENT_SERVO_PIN"], config["NUTRIENT_2_SERVO_PIN"])
+        )
+        log_action(controls, "dose_nutrient", "EC low " + str(round(ec, 2)), 2, "syringes")
         last_ec_dose_time = time.time()
     elif ec > config["EC_MAX"]:
         if not config["FRESH_WATER_PUMP_ENABLED"]:
             print(">>> EC HIGH - fresh water pump disabled")
+            log_action(controls, "dilute", "EC high but fresh water pump disabled")
             last_ec_dose_time = time.time()
             return
         print(">>> EC HIGH - adding fresh water")
         controls["set_output"](config["FRESH_WATER_PUMP_PIN"], 1)
         time.sleep(5)
         controls["set_output"](config["FRESH_WATER_PUMP_PIN"], 0)
+        log_action(controls, "dilute", "EC high " + str(round(ec, 2)), 5, "s")
         last_ec_dose_time = time.time()
 
 
@@ -113,23 +135,34 @@ def turbidity_check(readings, controls, config):
         update_status_light(controls)
         return
     if ntu > config["TURBIDITY_MAX"]:
+        if not dirty_water_alarm:
+            log_alarm(controls, "dirty_water", str(round(ntu, 2)) + " NTU")
         dirty_water_alarm = True
         print(">>> Water cloudy:", ntu, "NTU")
     else:
+        if dirty_water_alarm:
+            log_action(controls, "water_cleared", "turbidity back to normal")
         dirty_water_alarm = False
     update_status_light(controls)
 
 
 def temperature_protection(readings, controls, config):
     """Switch fan based on water temperature."""
+    global fan_is_on
     water_temp = readings["water_temp"]
     if water_temp == -999:
         return
     if water_temp > config["WATER_TEMP_MAX"]:
         controls["set_output"](config["FAN_PIN"], 1)
+        if not fan_is_on:
+            log_action(controls, "fan_on", str(round(water_temp, 2)) + " C water")
+        fan_is_on = True
         print(">>> Water hot (", water_temp, "C) - fan ON")
     elif water_temp < config["WATER_TEMP_MIN"]:
         controls["set_output"](config["FAN_PIN"], 0)
+        if fan_is_on:
+            log_action(controls, "fan_off", str(round(water_temp, 2)) + " C water")
+        fan_is_on = False
 
 
 def adjust_watering_by_weather(readings, config):
@@ -174,6 +207,7 @@ def check_and_water(readings, controls, config):
             no_flow_alarm = False
             update_status_light(controls)
             controls["set_output"](config["WATER_PUMP_PIN"], 1)
+            log_action(controls, "water_start", "target pulses " + str(current_water_target_pulses))
             is_watering = True
         else:
             time_left = current_irrigation_interval - (current_time - last_water_time)
@@ -192,6 +226,7 @@ def check_and_water(readings, controls, config):
         update_status_light(controls)
         is_watering = False
         last_water_time = current_time
+        log_action(controls, "water_done", "delivered", round(liters_so_far, 2), "L")
         return None
 
     if current_time - last_pulse_seen_time > config["NO_FLOW_TIMEOUT"]:
@@ -201,6 +236,7 @@ def check_and_water(readings, controls, config):
         controls["show_safe_state"]()
         is_watering = False
         last_water_time = current_time
+        log_alarm(controls, "no_flow", "no pulses for " + str(config["NO_FLOW_TIMEOUT"]) + " s")
         return controls["safe_state"]
 
     if elapsed > config["PUMP_TIMEOUT_SECONDS"]:
@@ -209,6 +245,7 @@ def check_and_water(readings, controls, config):
         controls["show_safe_state"]()
         is_watering = False
         last_water_time = current_time
+        log_alarm(controls, "pump_timeout", "runtime exceeded " + str(config["PUMP_TIMEOUT_SECONDS"]) + " s")
         return controls["safe_state"]
 
     return None
