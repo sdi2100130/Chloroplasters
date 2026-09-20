@@ -3,7 +3,7 @@ from machine import Pin
 import time
 
 FAN_PIN = 19
-FAN_ACTIVE_HIGH = True
+FAN_ACTIVE_HIGH = False
 ON_SECONDS = 5
 
 

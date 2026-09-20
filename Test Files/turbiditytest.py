@@ -1,24 +1,36 @@
 from machine import I2C, Pin
 import time
 
+# =========================================================
+# Turbidity Sensor Test - Calibrated for Chloroplasters
+# =========================================================
 
-# Qwiic / ADS1015 setup
+# --- Qwiic / ADS1015 setup ---
 I2C_SDA_PIN = 4
 I2C_SCL_PIN = 5
 ADS1015_ADDR = 0x48
-TURBIDITY_CHANNEL = 2   # ADS1015 A2 -> analog output from SEN0189
+TURBIDITY_CHANNEL = 2   # ADS1015 A2 -> αναλογική έξοδος (Aout) του SEN0189
 
-# ADS1015 settings
+# --- ADS1015 settings ---
 ADS1015_REG_CONVERSION = 0x00
 ADS1015_REG_CONFIG = 0x01
 ADS1015_CONFIG_BASE = 0x8583
 ADS1015_MUX = {0: 0x4000, 1: 0x5000, 2: 0x6000, 3: 0x7000}
 
-# Reading settings
+# --- Calibration Constants ---
+# Τάση αναφοράς καθαρού/διαυγούς νερού (βάσει των μετρήσεών σου ~2.95V - 3.10V)
+V_CLEAR = 3.00
+
+# Τάση πλήρους συσκότισης / μέγιστης θολότητας
+V_DARK = 0.80
+
+# Μέγιστη κλίμακα NTU
+MAX_NTU = 3000.0
+
+# --- Reading settings ---
 SAMPLES = 20
 SAMPLE_DELAY = 0.02
 INTERVAL = 1.0
-
 
 i2c = I2C(0, scl=Pin(I2C_SCL_PIN), sda=Pin(I2C_SDA_PIN), freq=100000)
 
@@ -43,7 +55,7 @@ def read_ads1015_channel(channel):
 
 def read_average_voltage():
     """Take several ADS1015 readings and return the average voltage."""
-    total = 0
+    total = 0.0
     for _ in range(SAMPLES):
         total += read_ads1015_channel(TURBIDITY_CHANNEL)
         time.sleep(SAMPLE_DELAY)
@@ -51,43 +63,45 @@ def read_average_voltage():
 
 
 def voltage_to_ntu(voltage):
-    """Estimate turbidity in NTU using the SEN0189 example curve."""
-    if voltage < 0.1:
-        return 3000.0
-
-    ntu = -1120.4 * voltage * voltage + 5742.3 * voltage - 4352.9
-
-    if ntu < 0:
+    """Μετατροπή τάσης σε NTU με βάση τη βαθμονόμηση καθαρού νερού (V_CLEAR)."""
+    if voltage is None:
         return 0.0
-    if ntu > 3000:
-        return 3000.0
+
+    # Τάση ίση ή μεγαλύτερη από το καθαρό νερό θεωρείται 0 NTU
+    if voltage >= V_CLEAR:
+        return 0.0
+
+    # Τάση χαμηλότερη από το κατώφλι μέγιστου σκότους τερματίζει στο MAX_NTU
+    if voltage <= V_DARK:
+        return MAX_NTU
+
+    # Γραμμική αναγωγή: όσο πέφτει η τάση, τόσο αυξάνεται η θολότητα
+    ntu = ((V_CLEAR - voltage) / (V_CLEAR - V_DARK)) * MAX_NTU
     return ntu
 
 
-print("=" * 50)
-print("TURBIDITY SENSOR TEST - DFRobot Gravity SEN0189")
-print("=" * 50)
-print("Qwiic ADS1015 address: 0x" + "{:02X}".format(ADS1015_ADDR))
-print("Sensor analog output connected to ADS1015 A" + str(TURBIDITY_CHANNEL))
-print()
-print("INSTRUCTIONS:")
-print("- Connect ADS1015 to the XRP Qwiic port")
-print("- Connect sensor VCC to 3.3V or 5V as required by its board")
-print("- Connect sensor GND to ADS1015/XRP GND")
-print("- Connect sensor analog output to ADS1015 A" + str(TURBIDITY_CHANNEL))
-print("- Keep analog output voltage within the ADS1015 input range")
-print("- Place probe in clean water first to see the baseline reading")
-print()
-print("Press CTRL+C to stop")
-print("=" * 50)
-print()
+def main():
+    print("=" * 50)
+    print("TURBIDITY SENSOR TEST - CALIBRATED")
+    print("=" * 50)
+    print("Qwiic ADS1015 address: 0x{:02X}".format(ADS1015_ADDR))
+    print("Sensor connected to ADS1015 A" + str(TURBIDITY_CHANNEL))
+    print("Baseline V_CLEAR: {:.2f} V (0 NTU)".format(V_CLEAR))
+    print("Baseline V_DARK:  {:.2f} V ({:.0f} NTU)".format(V_DARK, MAX_NTU))
+    print()
+    print("Press CTRL+C to stop")
+    print("=" * 50)
+    print()
+
+    try:
+        while True:
+            voltage = read_average_voltage()
+            ntu = voltage_to_ntu(voltage)
+
+            print("Voltage: {:.3f} V | Turbidity: {:.1f} NTU".format(voltage, ntu))
+            time.sleep(INTERVAL)
+    except KeyboardInterrupt:
+        print("\nTest stopped by user.")
 
 
-while True:
-    voltage = read_average_voltage()
-    ntu = voltage_to_ntu(voltage)
-
-    print("Voltage: " + "{:.3f}".format(voltage) + " V" +
-          " | Turbidity: " + "{:.1f}".format(ntu) + " NTU")
-
-    time.sleep(INTERVAL)
+main()

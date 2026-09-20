@@ -25,7 +25,7 @@ devices = i2c.scan()
 
 if len(devices) == 0:
     print()
-    print("❌ ERROR: No I2C devices found!")
+    print(" ERROR: No I2C devices found!")
     print()
     print("Check these things:")
     print("  1. Is the Qwiic cable firmly connected on both sides?")
@@ -34,14 +34,14 @@ if len(devices) == 0:
     print("  4. Try a different Qwiic cable")
     print()
 else:
-    print("✅ Found " + str(len(devices)) + " I2C device(s):")
+    print(" Found " + str(len(devices)) + " I2C device(s):")
     for device in devices:
         print("   Address: " + hex(device))
 
     if SHT31_ADDR in devices:
-        print("   -> SHT31 detected! ✅")
+        print("   -> SHT31 detected! ")
     else:
-        print("   -> SHT31 NOT FOUND at 0x44 ❌")
+        print("   -> SHT31 NOT FOUND at 0x44 ")
         print("      Check the wiring or the sensor address")
     print()
 
@@ -98,7 +98,7 @@ if SHT31_ADDR in devices:
         temp, hum = read_sht31()
 
         if temp is None or hum is None:
-            print("❌ Failed to read sensor - check connections")
+            print(" Failed to read sensor - check connections")
             time.sleep(2)
             continue
 
@@ -130,4 +130,4 @@ if SHT31_ADDR in devices:
               " | Humidity: " + "{:.1f}".format(hum) + "% " + hum_emoji)
 
         # Wait before next reading
-        time.sleep(1)
+        time.sleep(5)
